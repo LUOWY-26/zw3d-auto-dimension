@@ -6,7 +6,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.deepseek_wrapper import DeepseekToolWrapper
-from tools.zw3d_command_tool import ZW3DCommandTool
+from tools.zw3d_command_tool import ZW3DCommandTool, ZW3DCommandOpen, ZW3DCommandExpPDF
 import time
 
 
@@ -26,18 +26,21 @@ def main():
         wrapper = DeepseekToolWrapper()
         # computer = ComputerTool()
         command = ZW3DCommandTool()
+        open_c = ZW3DCommandOpen()
+        expPdf_c = ZW3DCommandExpPDF()
         wrapper.register_tool(command)
+        wrapper.register_tool(open_c)
+        wrapper.register_tool(expPdf_c)
 
         print("\nStarting demo in 3 seconds...")
         time.sleep(3)
 
-        # Move mouse
-        result = wrapper.execute("Firstly, I need open a part in ZW3D, so run command 'FILEOPEN', and params has one element, named 'filePath', value is 'a.Z3PRT'")
-        print_response("ZW3D COMMAND 1", result)
+        # execute command
+        result = wrapper.execute("在ZW3D打开文件'C:/Users/gyj15/AppData/Roaming/ZWSOFT/ZW3D/ZW3D 2905/output/archive/a.Z3PRT'。")
+        print_response("ZW3D COMMAND STEP-1", result)
         time.sleep(0.5)
-        result = wrapper.execute("And then run ZW3D command name 'EXPPDF', and params is a json data, the first one named 'path', "
-                                 "value is 'C:/Users/gyj15/Desktop/zw3d/export/file.pdf'. And the second parameter named 'pdfType', value is 2. ")
-        print_response("ZW3D COMMAND 2", result)
+        result = wrapper.execute("导出'OBJECT'类型的PDF文件到'C:/Users/gyj15/Desktop/zw3d/export/file.pdf'。")
+        print_response("ZW3D COMMAND STEP-2", result)
         print("end process...")
     except Exception as e:
         print(f"\nError: {e}")
