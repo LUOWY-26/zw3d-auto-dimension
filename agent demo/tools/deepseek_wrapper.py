@@ -5,6 +5,26 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from .tool_base import Tool
 from tools.tool_decorator import auto_fallback_if_incomplete
+from .auto_dimension_prompts import build_dimension_prompt, build_linear_dimension_prompt
+import tools.GPTAgent
+
+import time, os
+
+def wait_for_done(done_path: str, timeout=5.0):
+    import time
+    start = time.time()
+    while not os.path.exists(done_path):
+        if time.time() - start > timeout:
+            raise TimeoutError(f"Timeout waiting for {done_path}")
+        time.sleep(0.05)
+
+def read_with_done_check(json_path: str, done_path: str):
+    wait_for_done(done_path)
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = f.read()
+    os.remove(done_path)  # ✅ 删除 done 文件
+    return data
+
 
 class DeepseekToolWrapper:
     """Wrapper to use tools with Deepseek Reasoner through prompt engineering."""
@@ -62,18 +82,6 @@ Make sure to:
 3. Use correct parameter types
 4. Only use tools that are listed above"""
 
-    # def _extract_tool_call(self, content: str) -> Optional[Dict[str, Any]]:
-    #     """Extract and parse tool call from model response."""
-    #     try:
-    #         if "TOOL_CALL:" not in content:
-    #             return None
-    #
-    #         tool_json = content.split("TOOL_CALL:")[1].strip()
-    #         return json.loads(tool_json)
-    #     except Exception as e:
-    #         print(f"Error parsing tool call: {e}")
-    #         return None
-
     def _extract_tool_calls(self, content: str) -> list[Dict[str, Any]]:
         """从模型响应中提取所有 TOOL_CALL JSON 块。"""
         calls = []
@@ -88,37 +96,6 @@ Make sure to:
         except Exception as e:
             print(f"Error parsing tool calls: {e}")
         return calls
-
-    # def execute(self, user_input: str) -> str:
-    #     """Execute a tool based on user input."""
-    #     try:
-    #         # Get model's response
-    #         response = self.client.chat.completions.create(
-    #             model="deepseek-reasoner",
-    #             messages=[
-    #                 {"role": "system", "content": self._create_system_prompt()},
-    #                 {"role": "user", "content": user_input}
-    #             ]
-    #         )
-    #
-    #         # Get reasoning and potential tool call
-    #         reasoning = response.choices[0].message.reasoning_content
-    #         tool_call = self._extract_tool_call(response.choices[0].message.content)
-    #
-    #         if not tool_call:
-    #             return f"Reasoning:\n{reasoning}\n\nNo valid tool call was made."
-    #
-    #         # Validate tool exists
-    #         if tool_call["tool"] not in self.tools:
-    #             return f"Reasoning:\n{reasoning}\n\nError: Tool '{tool_call['tool']}' not found."
-    #
-    #         # Execute tool
-    #         result = self.tools[tool_call["tool"]]["tool"].run(tool_call["input_schema"])
-    #
-    #         return f"Reasoning:\n{reasoning}\n\nTool Call:\n{json.dumps(tool_call, indent=2)}\n\nResult:\n{result}"
-    #
-    #     except Exception as e:
-    #         return f"Error executing tool: {str(e)}"
 
     def execute_multi_step(self, user_input: str, max_steps: int = 5,
                            skip_first: Optional[Dict[str, Any]] = None) -> str:
@@ -178,7 +155,7 @@ Make sure to:
 
         return "\n\n".join(all_reasoning + all_results)
 
-    @auto_fallback_if_incomplete("execute_multi_step")
+    # @auto_fallback_if_incomplete("execute_multi_step")
     def execute(self, user_input: str) -> str:
         try:
             response = self.client.chat.completions.create(
@@ -190,26 +167,54 @@ Make sure to:
             )
             reasoning = response.choices[0].message.reasoning_content
             content = response.choices[0].message.content
+            print(content)
             tool_calls = self._extract_tool_calls(content)
 
             if not tool_calls:
-                return f"{reasoning}\n指令已执行完成，还有什么可以帮你的吗？"
+                return f"{reasoning}\n\n指令已执行完成，还有什么可以帮你的吗？"
                 # return f"{reasoning}\n\nNo valid tool call was made."
 
-            return_str = f"{reasoning}\n指令已执行完成，还有什么可以帮你的吗？"
+            return_str = f"{reasoning}\n\n"
             for tool_call in tool_calls:
                 tool_name = tool_call.get("tool")
                 if tool_name not in self.tools:
                     return f"{reasoning}\n\nTool '{tool_name}' not found."
 
                 result = self.tools[tool_name]["tool"].run(tool_call["input_schema"])
+                print(result)
 
                 # 缓存下第一条调用用于 fallback
                 self._tool_count = len(tool_calls)
                 self._last_tool_call = tool_call
+                if result["return code"] == 1 and tool_name == "zw3d_stdvucrt&dim":
+                    # auto_dimension_prompts = build_linear_dimension_prompt(result["stdout"])
+                    auto_dimension_agent = tools.GPTAgent.GPTAutoDimensionAgent()
+                    auto_dimension_prompts = auto_dimension_agent.generate_dimension_plan(result)
+                    response = self.client.chat.completions.create(
+                        model="deepseek-reasoner",
+                        messages=[
+                            {"role": "system", "content": self._create_system_prompt()},
+                            {"role": "user", "content": f"{auto_dimension_prompts["dimension recommendation"]}, 请你根据标注建议，调用工具完成线性长度标注和线性距离标注。"}
+                        ]
+                    )
+                    reasoning = response.choices[0].message.reasoning_content
+                    content = response.choices[0].message.content
+                    print(content)
+                    tool_calls = self._extract_tool_calls(content)
 
-                # return_str += f"TOOL_CALL:\n{json.dumps(tool_call, indent=2)}\n\nResult:\n{result}\n"
+                    if not tool_calls:
+                        return f"{return_str}{auto_dimension_prompts["dimension recommendation"]}\n\n还有什么可以帮你的吗？"
+                        # return f"{reasoning}\n\nNo valid tool call was made."
 
+                    for tool_call in tool_calls:
+                        tool_name = tool_call.get("tool")
+                        if tool_name not in self.tools:
+                            return f"{return_str}{reasoning}\n\nTool '{tool_name}' not found."
+
+                        result = self.tools[tool_name]["tool"].run(tool_call["input_schema"])
+                        print(result)
+
+                    return_str = f"{return_str}{reasoning}\n\n指令已执行完成，还有什么可以帮你的吗？"
             return return_str
 
         except Exception as e:
