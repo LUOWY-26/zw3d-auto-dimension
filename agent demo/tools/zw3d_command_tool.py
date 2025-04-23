@@ -88,7 +88,6 @@ class ZW3DCommandOpen(Tool):
                 "filePath": {
                     "type": "string",
                     "description": "file path to open",
-                    "required": True
                 },
             },
             "required": ["filePath"]
@@ -146,10 +145,9 @@ class ZW3DCommandSave(Tool):
             "type": "object",
             "properties": {
                 "close": {
-                    "type": "int",
+                    "type": "integer",
                     "description": "whether close the file after save it. if user do not specify the value, default set to 0."
                                    "{close: 1, open: 0}",
-                    "required": False
                 },
             },
             "required": []
@@ -161,7 +159,7 @@ class ZW3DCommandSave(Tool):
 
         Args:
             input: Dictionary containing:
-                close: whether to close the file after save it.
+                close: whether to close the file after saving it.
 
         Returns:
             Dictionary containing command output, error message, and return code
@@ -200,7 +198,8 @@ class ZW3DCommandExp(Tool):
     @property
     def description(self) -> str:
         return ("Execute ZW3D export command, export the active file into certain type's file. "
-                "When the parameter 'type' is PDF or IMG, we need the parameter 'subtype', besides that 'subType' default to 0.")
+                "When the parameter 'type' is PDF or IMG, we need the parameter 'subtype', besides that 'subType' default to 0."
+                "all parameters need to be set even if user do not specify the value")
 
     @property
     def input_schema(self) -> Dict[str, Any]:
@@ -210,19 +209,16 @@ class ZW3DCommandExp(Tool):
                 "path": {
                     "type": "string",
                     "description": "file path for export.",
-                    "required": True
                 },
                 "type": {
-                    "type": "int",
+                    "type": "integer",
                     "description": "export type list below:"
                                    "1 : IMG, 2: PDF, 3: GRP, 4: DWG, 5: IGES, 6: STEP, 7: JT, 8: PARA_TEXT, 9: PARA_BINARY,"
                                    "10: CAT5_PART, 11: CAT5_ASM, 12: HTML, 13: STL, 14: OBJ, 15: IDF_PART, 16: IDF_ASM.",
-                    "required": True
                 },
                 "subType": {
-                    "type": "int",
+                    "type": "integer",
                     "description": "export subtype, only used for PDF or IMG, when user do not provide this parameter, set subType to 0.",
-                    "required": True
                 }
             },
             "required": ["path", "type", "subType"]
@@ -285,23 +281,19 @@ class ZW3DCommandStdVuCreate(Tool):
                 "path": {
                     "type": "string",
                     "description": "file path for part need to be projected.",
-                    "required": True
                 },
                 "type": {
-                    "type": "int",
+                    "type": "integer",
                     "description": "view type for standard view, if user do not specify the value, default set to 7"
                                    "{TOP: 1, FRONT: 2, RIGHT: 3, BACK: 4, BOTTOM: 5, LEFT: 6, ISOMETRIC: 7, DIMETRIC: 39}",
-                    "required": True
                 },
                 "x": {
-                    "type": "double",
+                    "type": "number",
                     "description": "standard view location for x axis, if user do not specify the value, default set to 100.0",
-                    "required": True
                 },
                 "y": {
-                    "type": "double",
+                    "type": "number",
                     "description": "standard view location for y axis, if user do not specify the value, default set to 100.0",
-                    "required": True
                 }
             },
             "required": ["path", "type", "x", "y"]
@@ -353,7 +345,7 @@ class ZW3DCommandStdVuDim(Tool):
     """
     @property
     def name(self) -> str:
-        return "zw3d_stdvucrt&dim"
+        return "zw3d_stdvucrt_dim"
 
     @property
     def description(self) -> str:
@@ -367,23 +359,19 @@ class ZW3DCommandStdVuDim(Tool):
                 "path": {
                     "type": "string",
                     "description": "file path for part need to be projected.",
-                    "required": True
                 },
                 "type": {
-                    "type": "int",
+                    "type": "integer",
                     "description": "view type for standard view, if user do not specify the value, default set to 7"
                                    "{TOP: 1, FRONT: 2, RIGHT: 3, BACK: 4, BOTTOM: 5, LEFT: 6, ISOMETRIC: 7, DIMETRIC: 39}",
-                    "required": True
                 },
                 "x": {
-                    "type": "double",
+                    "type": "number",
                     "description": "standard view location for x axis, if user do not specify the value, default set to 100.0",
-                    "required": True
                 },
                 "y": {
-                    "type": "double",
+                    "type": "number",
                     "description": "standard view location for y axis, if user do not specify the value, default set to 100.0",
-                    "required": True
                 }
             },
             "required": ["path", "type", "x", "y"]
@@ -455,20 +443,19 @@ class ZW3DCommandLinearDim(Tool):
             "type": "object",
             "properties": {
                 "id" : {
-                    "type": "int",
+                    "type": "integer",
                     "description": "line id, if user do not specify the value, default set to 0",
-                    "required": True
                 },
                 "start point": {
                     "type": "object",
                     "description": "start point for linear dimension, contain: 'x', 'y'.",
                     "properties": {
                         "x": {
-                            "type": "double",
+                            "type": "number",
                             "description": "start point's x axis value."
                         },
                         "y": {
-                            "type": "double",
+                            "type": "number",
                             "description": "start point's y axis value."
                         },
                     },
@@ -479,11 +466,11 @@ class ZW3DCommandLinearDim(Tool):
                     "description": "end point for linear dimension, contain: 'x', 'y'.",
                     "properties": {
                         "x": {
-                            "type": "double",
+                            "type": "number",
                             "description": "end point's x axis value."
                         },
                         "y": {
-                            "type": "double",
+                            "type": "number",
                             "description": "end point's y axis value."
                         },
                     },
@@ -494,11 +481,11 @@ class ZW3DCommandLinearDim(Tool):
                     "description": "text point for linear dimension, contain: 'x', 'y'.",
                     "properties": {
                         "x": {
-                            "type": "double",
+                            "type": "number",
                             "description": "text point's x axis value."
                         },
                         "y": {
-                            "type": "double",
+                            "type": "number",
                             "description": "text point's y axis value."
                         },
                     },
@@ -558,44 +545,68 @@ class ZW3DCommandLinearOffsetDim(Tool):
 
     @property
     def description(self) -> str:
-        return ("Execute ZW3D linear distance dimension create command, for 'line to line' distance or 'point to line' distance.")
+        return ("Execute ZW3D distance dimension create command, for dimension the distance between two entities")
 
     @property
     def input_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "type": {
-                    "type": "int",
-                    "description": "dimension type, 1: dimension the distance between two lines. 2: dimension the distance between a point and a line."
-                },
                 "id1" : {
-                    "type": "int",
+                    "type": "integer",
                     "description": "first entity's id",
-                    "required": True
                 },
                 "id2" : {
-                    "type": "int",
+                    "type": "integer",
                     "description": "second entity's id",
-                    "required": True
+                },
+                "first point": {
+                    "type": "object",
+                    "description": "point on the first entity, attached by id1, contain: 'x', 'y'.",
+                    "properties": {
+                        "x": {
+                            "type": "number",
+                            "description": "first point's x axis value."
+                        },
+                        "y": {
+                            "type": "number",
+                            "description": "first point's y axis value."
+                        },
+                    },
+                    "required": ["x", "y"]
+                },
+                "second point": {
+                    "type": "object",
+                    "description": "point on the second entity, attached by id2, contain: 'x', 'y'.",
+                    "properties": {
+                        "x": {
+                            "type": "number",
+                            "description": "second point's x axis value."
+                        },
+                        "y": {
+                            "type": "number",
+                            "description": "second point's y axis value."
+                        },
+                    },
+                    "required": ["x", "y"]
                 },
                 "text point": {
                     "type": "object",
                     "description": "text point for linear offset dimension, contain: 'x', 'y'.",
                     "properties": {
                         "x": {
-                            "type": "double",
+                            "type": "number",
                             "description": "text point's x axis value."
                         },
                         "y": {
-                            "type": "double",
+                            "type": "number",
                             "description": "text point's y axis value."
                         },
                     },
                     "required": ["x", "y"]
                 },
             },
-            "required": ["type", "id1", "id2", "text point"]
+            "required": ["type", "id1", "id2", "first point", "second point", "text point"]
         }
 
     def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
@@ -608,15 +619,17 @@ class ZW3DCommandLinearOffsetDim(Tool):
         Returns:
             Dictionary containing command output, error message, and return code
         """
-        dimType = input.get('type')
         id1 = input.get('id1')
         id2 = input.get('id2')
+        fpoint = input.get('first point')
+        spoint = input.get('second point')
         text_point = input.get('text point')
 
         json_str = {
-            "type": dimType,
             "id1": id1,
             "id2": id2,
+            "first point": fpoint,
+            "second point": spoint,
             "text point": text_point,
         }
 
@@ -637,132 +650,3 @@ class ZW3DCommandLinearOffsetDim(Tool):
             "stderr": result.stderr.strip(),
             "return code": result.returncode
         }
-
-# class ZW3DCommandExpPDF(Tool):
-#     """
-#     Tool for running ZW3D command.
-#     """
-#     @property
-#     def name(self) -> str:
-#         return "zw3d_expPdf"
-#
-#     @property
-#     def description(self) -> str:
-#         return "Execute ZW3D export PDF command, export the active file into a PDF file"
-#
-#     @property
-#     def input_schema(self) -> Dict[str, Any]:
-#         return {
-#             "type": "object",
-#             "properties": {
-#                 "path": {
-#                     "type": "string",
-#                     "description": "file path for export",
-#                 },
-#                 "pdfType": {
-#                     "type": "string",
-#                     "description": "export type",
-#                     "enum": ["RASTER", "VECTOR", "OBJECT"],
-#                     "default": "VECTOR"
-#                 },
-#             },
-#             "required": ["path", "pdfType"]
-#         }
-#
-#     def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
-#         """
-#         Execute a ZW3D remote command.
-#
-#         Args:
-#             input: Dictionary containing:
-#
-#         Returns:
-#             Dictionary containing command output, error message, and return code
-#         """
-#         path = input.get('path')
-#         pdfType = input.get('pdfType')
-#         if pdfType == "RASTER":
-#             pdfType = 0
-#         elif pdfType == "VECTOR":
-#             pdfType = 1
-#         else:
-#             pdfType = 2
-#
-#         json_str = {
-#             "path": f"{path}",
-#             "pdfType": pdfType
-#         }
-#
-#         json_str = json.dumps(json_str)
-#
-#         cmd = [
-#             'zw3dremote',
-#             '-r', 'local',
-#             f'cmd=~EXPPDF({json_str})'
-#         ]
-#
-#         result = subprocess.run(cmd, capture_output=True, text=True)
-#
-#         return {
-#             "stdout": result.stdout.strip(),
-#             "stderr": result.stderr.strip(),
-#             "return code": result.returncode
-#         }
-
-
-# class ZW3DCommandExpDWG(Tool):
-#     """
-#     Tool for running ZW3D command.
-#     """
-#     @property
-#     def name(self) -> str:
-#         return "zw3d_expDWG"
-#
-#     @property
-#     def description(self) -> str:
-#         return "Execute ZW3D export DWG command, export the active file into a DWG file"
-#
-#     @property
-#     def input_schema(self) -> Dict[str, Any]:
-#         return {
-#             "type": "object",
-#             "properties": {
-#                 "path": {
-#                     "type": "string",
-#                     "description": "file path for export",
-#                 },
-#             },
-#             "required": ["path"]
-#         }
-#
-#     def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
-#         """
-#         Execute a ZW3D remote command.
-#
-#         Args:
-#             input: Dictionary containing:
-#
-#         Returns:
-#             Dictionary containing command output, error message, and return code
-#         """
-#         path = input.get('path')
-#
-#         json_str = {
-#             "path": f"{path}"
-#         }
-#
-#         json_str = json.dumps(json_str)
-#
-#         cmd = [
-#             'zw3dremote',
-#             '-r', 'local',
-#             f'cmd=~EXPDWG({json_str})'
-#         ]
-#
-#         result = subprocess.run(cmd, capture_output=True, text=True)
-#
-#         return {
-#             "stdout": result.stdout.strip(),
-#             "stderr": result.stderr.strip(),
-#             "return code": result.returncode
-#         }
