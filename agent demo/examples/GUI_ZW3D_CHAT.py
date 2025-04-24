@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 import tiktoken
 from tools.deepseek_wrapper import DeepseekToolWrapper
+from tools.gpt_wrapper import GPTToolWrapper
 from tools import zw3d_command_tool
 from tools.tool_base import Tool
 import importlib
@@ -257,7 +258,10 @@ def register_all_tools(wrapper):
 
 
 if __name__ == "__main__":
-    wrapper = DeepseekToolWrapper()
+    # wrapper = DeepseekToolWrapper()
+    # register_all_tools(wrapper)
+
+    wrapper = GPTToolWrapper()
     register_all_tools(wrapper)
 
     root = tk.Tk()
