@@ -447,6 +447,28 @@ extern "C" __declspec(dllexport) int standardViewCreate(const char* jsonParams) 
 	}
 }
 
+szwPoint projectPointToLine(const szwPoint2& P, const szwPoint& A, const szwPoint& B) {
+	double dx = B.x - A.x;
+	double dy = B.y - A.y;
+
+	double len_squared = dx * dx + dy * dy;
+
+	if (len_squared == 0.0) {
+		return { A.x, A.y };
+	}
+
+	double px = P.x - A.x;
+	double py = P.y - A.y;
+
+	double t = (px * dx + py * dy) / len_squared;
+
+	szwPoint Q;
+	Q.x = A.x + t * dx;
+	Q.y = A.y + t * dy;
+
+	return Q;
+}
+
 extern "C" __declspec(dllexport) int linearOffsetDimension(const char* jsonParams) {
 	try {
 		//assume the view is active
@@ -455,67 +477,132 @@ extern "C" __declspec(dllexport) int linearOffsetDimension(const char* jsonParam
 		int lineId1 = params["id1"].get<int>();
 		int lineId2 = params["id2"].get<int>();
 
-		int type = params["type"].get<int>();
-
+		szwPoint2 firstPoint = { params["first point"]["x"].get<double>(), params["first point"]["y"].get<double>()};
+		szwPoint2 secondPoint = { params["second point"]["x"].get<double>(), params["second point"]["y"].get<double>()};
 		szwPoint textPoint = { params["text point"]["x"].get<double>(), params["text point"]["y"].get<double>(), 0 };
 
 		ezwErrors err;
 		szwEntityHandle lineHdl1;
 		szwEntityHandle lineHdl2;
-		szwDrawingLinearOffsetDimension data;
-		data.type = (ezwDimensionLinearOffsetType)type;
 		err = ZwApiIdtoHandle(lineId1, &lineHdl1);
 		err = ZwApiIdtoHandle(lineId2, &lineHdl2);
 
-		if (type == 2)
+
+		szwCurve curve1;
+		ZwCurveNURBSDataGet(lineHdl1, 1, &curve1);
+		szwCurve curve2;
+		ZwCurveNURBSDataGet(lineHdl2, 1, &curve2);
+
+		//special case, two line distance
+		if (curve1.type == ZW_CURVE_LINE && curve2.type == ZW_CURVE_LINE)
 		{
-			//data.firstPoint.pointType = ZW_DRAWING_DIMENSION_MIDDLE_POINT;
-			//data.secondPoint.pointType = ZW_DRAWING_DIMENSION_ARC_CENTER;
+			szwDrawingLinearOffsetDimension dataOff;
+			dataOff.type = (ezwDimensionLinearOffsetType)1;
+			dataOff.secondPoint.pointType = ZW_DRAWING_DIMENSION_MIDDLE_POINT;
+			dataOff.firstPoint.pointType = ZW_DRAWING_DIMENSION_MIDDLE_POINT;
+			dataOff.secondPoint.entityHandle = lineHdl1;
+			dataOff.firstPoint.entityHandle = lineHdl2;
 
-			data.firstPoint.pointType = ZW_DRAWING_DIMENSION_ARC_CENTER;
-			data.secondPoint.pointType = ZW_DRAWING_DIMENSION_FREE_POINT;
+			dataOff.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
+			err = ZwDrawingDimensionLinearOffsetCreate(dataOff, NULL, NULL);
 
-			szwCurve curve;
-			ZwCurveNURBSDataGet(lineHdl1, 1, &curve);
-			if (curve.type == ZW_CURVE_LINE)
+			if (err != ZW_API_NO_ERROR) {
+				WriteMessage("err code = %i, line to line", static_cast<int>(err));
+				WriteMessage("may has err id: %i, %i", lineId1, lineId2);
+			}
+			WriteMessage("[console] linear offset dimension created.");
+			return static_cast<int>(err);
+		}
+
+		else if(curve1.type == ZW_CURVE_LINE || curve2.type == ZW_CURVE_LINE)
+		{
+			szwDrawingLinearOffsetDimension dataOff;
+			dataOff.type = (ezwDimensionLinearOffsetType)2;
+			
+			dataOff.firstPoint.pointType = ZW_DRAWING_DIMENSION_ARC_CENTER;
+			dataOff.secondPoint.pointType = ZW_DRAWING_DIMENSION_FREE_POINT;
+
+			if (curve1.type == ZW_CURVE_ARC || curve1.type == ZW_CURVE_CIRCLE)
 			{
-				//data.firstPoint.entityHandle = lineHdl1;
-				data.secondPoint.entityHandle = lineHdl1;
+				//dataOff.secondPoint.entityHandle = lineHdl2;
+				dataOff.firstPoint.entityHandle = lineHdl1;
+
+				dataOff.secondPoint.freePoint = firstPoint;
+
+				szwPoint pointProject = projectPointToLine(firstPoint, curve2.curveInformation.line.startPoint, curve2.curveInformation.line.endPoint);
+				dataOff.firstPoint.freePoint = { pointProject.x, pointProject.y };
 			}
 			else
 			{
-				data.firstPoint.entityHandle = lineHdl1;
-				//data.secondPoint.entityHandle = lineHdl1;
+				//dataOff.secondPoint.entityHandle = lineHdl1;
+				dataOff.firstPoint.entityHandle = lineHdl2;
+
+				dataOff.secondPoint.freePoint = secondPoint;
+				
+				szwPoint pointProject = projectPointToLine(secondPoint, curve1.curveInformation.line.startPoint, curve1.curveInformation.line.endPoint);
+				dataOff.firstPoint.freePoint = { pointProject.x, pointProject.y };
+			}
+			dataOff.firstPoint.definingPoint = 0;
+			dataOff.secondPoint.definingPoint = 0;
+			dataOff.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
+			err = ZwDrawingDimensionLinearOffsetCreate(dataOff, NULL, NULL);
+
+			if (err != ZW_API_NO_ERROR) {
+				WriteMessage("err code = %i, point to line", static_cast<int>(err));
+				WriteMessage("may has err id: %i, %i", lineId1, lineId2);
+			}
+			WriteMessage("[console] linear offset dimension created.");
+			return static_cast<int>(err);
+		}
+
+		else {
+
+			szwDrawingLinearDimension data;
+			data.type = ZW_DIMENSION_LINEAR_ALIGNED;
+
+			data.firstPoint.referenceEntityHandle = &lineHdl1;
+			data.secondPoint.referenceEntityHandle = &lineHdl2;
+			data.firstPoint.controlPointIndex = 0;
+			data.secondPoint.controlPointIndex = 0;
+			data.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
+
+			if (curve1.type == ZW_CURVE_ARC || curve1.type == ZW_CURVE_CIRCLE)
+			{
+				data.firstPoint.criticalPointType = ZW_CRITICAL_CENTER_POINT;
+				szwPoint circleCenter = { firstPoint.x, firstPoint.y, 0 };
+				data.firstPoint.point = &circleCenter;
+			}
+			else if (curve1.type == ZW_CURVE_LINE)
+			{
+				data.firstPoint.criticalPointType = ZW_CRITICAL_FREE_POINT;
+				szwPoint pointProject = projectPointToLine(secondPoint, curve1.curveInformation.line.startPoint, curve1.curveInformation.line.endPoint);
+				data.firstPoint.point = &pointProject;
 			}
 
-			ZwCurveNURBSDataGet(lineHdl2, 1, &curve);
-			if (curve.type == ZW_CURVE_LINE)
+			if (curve2.type == ZW_CURVE_ARC || curve2.type == ZW_CURVE_CIRCLE)
 			{
-				//data.firstPoint.entityHandle = lineHdl2;
-				data.secondPoint.entityHandle = lineHdl2;
+				data.secondPoint.criticalPointType = ZW_CRITICAL_CENTER_POINT;
+				szwPoint circleCenter = { secondPoint.x, secondPoint.y, 0 };
+				data.secondPoint.point = &circleCenter;
 			}
-			else
+			else if (curve2.type == ZW_CURVE_LINE)
 			{
-				data.firstPoint.entityHandle = lineHdl2;
-				//data.secondPoint.entityHandle = lineHdl2;
+				data.secondPoint.criticalPointType = ZW_CRITICAL_FREE_POINT;
+				szwPoint pointProject = projectPointToLine(firstPoint, curve2.curveInformation.line.startPoint, curve2.curveInformation.line.endPoint);
+				data.secondPoint.point = &pointProject;
 			}
-		}
-		else if (type == 1)
-		{
-			data.secondPoint.pointType = ZW_DRAWING_DIMENSION_MIDDLE_POINT;
-			data.firstPoint.pointType = ZW_DRAWING_DIMENSION_MIDDLE_POINT;
-			data.secondPoint.entityHandle = lineHdl1;
-			data.firstPoint.entityHandle = lineHdl2;
-		}
-		data.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
-		szwEntityHandle out;
-		err = ZwDrawingDimensionLinearOffsetCreate(data, nullptr, &out);
 
-		if (err != ZW_API_NO_ERROR) {
-			WriteMessage("err code = %i", static_cast<int>(err));
+			szwEntityHandle out;
+			err = ZwDrawingDimensionLinearCreate(data, nullptr, &out);
+
+			if (err != ZW_API_NO_ERROR) {
+				WriteMessage("err code = %i", static_cast<int>(err));
+				WriteMessage("may has err id: %i, %i", lineId1, lineId2);
+			}
+
+			WriteMessage("[console] distance dimension created.");
+			return static_cast<int>(err);
 		}
-		WriteMessage("[console] linear offset dimension created.");
-		return static_cast<int>(err);
 	}
 	catch (const std::exception& e) {
 		WriteMessage("JSON parse err: %s", e.what());
@@ -601,26 +688,26 @@ extern "C" __declspec(dllexport) int drwGetEntData(const char* jsonParams) {
 				if (pointsNum == 3)
 				{
 					ent["type"] = "line";
-					ent["start"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
-					ent["end"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
-					ent["middle"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
+					ent["points"]["start"] = {pointsInfo[0].point.x, pointsInfo[0].point.y};
+					ent["points"]["end"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
+					ent["points"]["middle"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
 				}
 				else if (pointsNum == 4)
 				{
 					ent["type"] = "arc";
-					ent["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
-					ent["start"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
-					ent["end"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
-					ent["middle"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
+					ent["points"]["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
+					ent["points"]["start"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
+					ent["points"]["end"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
+					ent["points"]["middle"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
 				}
 				else if (pointsNum == 5)
 				{
 					ent["type"] = "circle";
-					ent["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
-					ent["0degree"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
-					ent["90degree"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
-					ent["180degree"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
-					ent["270degree"] = { pointsInfo[4].point.x, pointsInfo[4].point.y };
+					ent["points"]["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
+					ent["points"]["0degree"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
+					ent["points"]["90degree"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
+					ent["points"]["180degree"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
+					ent["points"]["270degree"] = { pointsInfo[4].point.x, pointsInfo[4].point.y };
 				}
 				viewGeom["entities"].push_back(ent);
 			}
@@ -682,9 +769,20 @@ extern "C" __declspec(dllexport) int standardViewDimension(const char* jsonParam
 		double y = params["y"].get<double>();
 		szwPoint2 location{ x, y };
 
+		std::string label = "TOP";
+
+		szwViewAttribute stdVuAtt;
+		stdVuAtt.showLabel = 1;
+		strcpy_s(stdVuAtt.label, sizeof(zwString32), label.c_str());
+		stdVuAtt.displayMode = ZW_VIEW_HIDDEN_LINE;
+		stdVuAtt.scaleType = (ezwViewScaleType)0;
+		stdVuAtt.showScale = 0;
+		stdVuAtt.scaleRatioX = 0.5;
+		stdVuAtt.scaleRatioY = 1;
 		szwViewStandardData stdVuData;
 
 		err = ZwDrawingViewStandardDataInit(&stdVuData);
+		stdVuData.viewAttribute = stdVuAtt;
 
 		if (err != ZW_API_NO_ERROR) {
 			WriteMessage("err code = %i", static_cast<int>(err));
@@ -725,14 +823,12 @@ extern "C" __declspec(dllexport) int standardViewDimension(const char* jsonParam
 		autoDim.pointOrigin = {};
 		autoDim.horizontalDimension.enable = 0;
 		autoDim.verticalDimension.enable = 0;
-
-		szwEntityHandle* dims;
-		err = ZwDrawingDimensionAutoCreate(stdVu, autoDim, &dimCount, &dims);
-
+		//szwEntityHandle* dims;
+		//err = ZwDrawingDimensionAutoCreate(stdVu, autoDim, &dimCount, &dims);
 		if (err != ZW_API_NO_ERROR) {
 			WriteMessage("err code = %i", static_cast<int>(err));
 		}
-
+		WriteMessage("[console]hole dimension complete", static_cast<int>(err));
 		json viewGeom;
 
 		viewGeom["view"] = type;
@@ -754,34 +850,34 @@ extern "C" __declspec(dllexport) int standardViewDimension(const char* jsonParam
 			json ent;
 			ent["id"] = id;
 			if (pointsNum == 3)
-			{			
+			{
 				ent["type"] = "line";
-				ent["start"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
-				ent["end"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
-				ent["middle"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
+				ent["points"]["start"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
+				ent["points"]["end"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
+				ent["points"]["middle"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
 			}
 			else if (pointsNum == 4)
 			{
 				ent["type"] = "arc";
-				ent["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
-				ent["start"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
-				ent["end"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
-				ent["middle"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
+				ent["points"]["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
+				ent["points"]["start"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
+				ent["points"]["end"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
+				ent["points"]["middle"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
 			}
 			else if (pointsNum == 5)
 			{
 				ent["type"] = "circle";
-				ent["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
-				ent["0degree"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
-				ent["90degree"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
-				ent["180degree"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
-				ent["270degree"] = { pointsInfo[4].point.x, pointsInfo[4].point.y };
+				ent["points"]["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
+				ent["points"]["0degree"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
+				ent["points"]["90degree"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
+				ent["points"]["180degree"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
+				ent["points"]["270degree"] = { pointsInfo[4].point.x, pointsInfo[4].point.y };
 			}
 			viewGeom["entities"].push_back(ent);
 		}
 		WriteMessage("entities num = %i", static_cast<int>(entNum));
 		ZwEntityHandleListFree(entNum, &ents);
-		ZwEntityHandleListFree(dimCount, &dims);
+		//ZwEntityHandleListFree(dimCount, &dims);
 
 		if (err != ZW_API_NO_ERROR) {
 			WriteMessage("err code = %i", static_cast<int>(err));
@@ -840,60 +936,60 @@ extern "C" __declspec(dllexport) int pathSearchFirst(const vxLongPath Name) {
 }
 
 
-//extern "C" __declspec(dllexport) std::string getViewLines()
-//{
-//	try {
-//		int count = 0;
-//		szwEntityHandle* pViews;
-//		ZwDrawingSheetViewListGet(nullptr, ZW_DRAWING_ALL_VIEW, &count, &pViews);
-//
-//		string jstr;
-//		if (count > 0)
-//		{
-//			int cnt_geom = 0;
-//			szwEntityHandle* pGeoms;
-//			ZwDrawingViewGeometryListGet(pViews[0], ZW_DRAWING_SHOWN_GEOMETRY_COORESPONDING_EDGE_AND_FACE, &cnt_geom, &pGeoms);
-//
-//			json jout;
-//			for (int i = 0; i < cnt_geom; i++)
-//			{
-//				szwCurve curve;
-//				ZwCurveNURBSDataGet(pGeoms[i], 1, &curve);
-//				switch (curve.type)
-//				{
-//				case ZW_CURVE_LINE:
-//					jout["type"] = "line";
-//					jout["data"] = json();
-//					jout["data"]["start point"] = { curve.curveInformation.line.startPoint.x,curve.curveInformation.line.startPoint.y };
-//					jout["data"]["end point"] = { curve.curveInformation.line.endPoint.x,curve.curveInformation.line.endPoint.y };
-//					break;
-//				case ZW_CURVE_ARC:
-//					jout["type"] = "arc";
-//					jout["data"] = json();
-//					jout["data"]["radius"] = curve.curveInformation.arc.radius;
-//					jout["data"]["start point"] = { curve.curveInformation.arc.startPoint.x,curve.curveInformation.arc.startPoint.y };
-//					jout["data"]["end point"] = { curve.curveInformation.arc.endPoint.x,curve.curveInformation.arc.endPoint.y };
-//					jout["data"]["start angle"] = curve.curveInformation.arc.startAngle;
-//					jout["data"]["end angle"] = curve.curveInformation.arc.endAngle;
-//					jout["data"]["center point"] = { curve.curveInformation.arc.centerPoint.x,curve.curveInformation.arc.centerPoint.y };
-//					break;
-//				case ZW_CURVE_CIRCLE:
-//					jout["data"]["radius"] = curve.curveInformation.circle.radius;
-//					jout["data"]["center point"] = { curve.curveInformation.circle.centerPoint.x,curve.curveInformation.circle.centerPoint.y };
-//					break;
-//				default:
-//					continue;
-//				}
-//			}
-//			jstr = jout.dump();
-//		}
-//		return jstr;
-//	}
-//	catch (const std::exception& e) {
-//		WriteMessage("JSON parse err: %s", e.what());
-//		return string();
-//	}
-//}
+extern "C" __declspec(dllexport) const char* getViewLines()
+{
+	try {
+		int count = 0;
+		szwEntityHandle* pViews;
+		ZwDrawingSheetViewListGet(nullptr, ZW_DRAWING_ALL_VIEW, &count, &pViews);
+
+		string jstr;
+		if (count > 0)
+		{
+			int cnt_geom = 0;
+			szwEntityHandle* pGeoms;
+			ZwDrawingViewGeometryListGet(pViews[0], ZW_DRAWING_SHOWN_GEOMETRY_COORESPONDING_EDGE_AND_FACE, &cnt_geom, &pGeoms);
+
+			json jout;
+			for (int i = 0; i < cnt_geom; i++)
+			{
+				szwCurve curve;
+				ZwCurveNURBSDataGet(pGeoms[i], 1, &curve);
+				switch (curve.type)
+				{
+				case ZW_CURVE_LINE:
+					jout["type"] = "line";
+					jout["data"] = json();
+					jout["data"]["start point"] = { curve.curveInformation.line.startPoint.x,curve.curveInformation.line.startPoint.y };
+					jout["data"]["end point"] = { curve.curveInformation.line.endPoint.x,curve.curveInformation.line.endPoint.y };
+					break;
+				case ZW_CURVE_ARC:
+					jout["type"] = "arc";
+					jout["data"] = json();
+					jout["data"]["radius"] = curve.curveInformation.arc.radius;
+					jout["data"]["start point"] = { curve.curveInformation.arc.startPoint.x,curve.curveInformation.arc.startPoint.y };
+					jout["data"]["end point"] = { curve.curveInformation.arc.endPoint.x,curve.curveInformation.arc.endPoint.y };
+					jout["data"]["start angle"] = curve.curveInformation.arc.startAngle;
+					jout["data"]["end angle"] = curve.curveInformation.arc.endAngle;
+					jout["data"]["center point"] = { curve.curveInformation.arc.centerPoint.x,curve.curveInformation.arc.centerPoint.y };
+					break;
+				case ZW_CURVE_CIRCLE:
+					jout["data"]["radius"] = curve.curveInformation.circle.radius;
+					jout["data"]["center point"] = { curve.curveInformation.circle.centerPoint.x,curve.curveInformation.circle.centerPoint.y };
+					break;
+				default:
+					continue;
+				}
+			}
+			jstr = jout.dump();
+		}
+		return jstr.c_str();
+	}
+	catch (const std::exception& e) {
+		WriteMessage("JSON parse err: %s", e.what());
+		return "";
+	}
+}
 
 
 extern "C" __declspec(dllexport) int ZW3D_V1Init() {
