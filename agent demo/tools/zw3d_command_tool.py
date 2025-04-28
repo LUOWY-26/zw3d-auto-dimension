@@ -1,11 +1,11 @@
-from blib2to3.pgen2.tokenize import doubleprog
-from sympy.strategies.core import switch
-
 from .tool_base import Tool
 import subprocess
 import json
 from typing import Dict, Any
-import os
+from . import user_config
+
+def CommandRun(cmd):
+    return subprocess.run(cmd, cwd=user_config.app_path, capture_output=True, text=True, check=True, shell=True)
 
 class ZW3DCommandTool(Tool):
     """
@@ -59,8 +59,8 @@ class ZW3DCommandTool(Tool):
             f'cmd=~{command}({json_str})'
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-
+        result = CommandRun(cmd)
+        
         return {
             "stdout": result.stdout.strip(),
             "stderr": result.stderr.strip(),
@@ -118,7 +118,7 @@ class ZW3DCommandOpen(Tool):
             f'cmd=~FILEOPEN({json_str})'
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = CommandRun(cmd)
         print("result:", result)
 
         return {
@@ -179,7 +179,7 @@ class ZW3DCommandSave(Tool):
         ]
         print(cmd)
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = CommandRun(cmd)
 
         return {
             "stdout": result.stdout.strip(),
@@ -252,8 +252,7 @@ class ZW3DCommandExp(Tool):
             f'cmd=~FILEEXPORT({json_str})'
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        print(result)
+        result = CommandRun(cmd)
 
         return {
             "stdout": result.stdout.strip(),
@@ -329,10 +328,8 @@ class ZW3DCommandStdVuCreate(Tool):
             f'cmd=~STDVUCRT({json_str})'
         ]
 
-        print(cmd)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-
+        result = CommandRun(cmd)
+        
         return {
             "stdout": result.stdout.strip(),
             "stderr": result.stderr.strip(),
@@ -341,7 +338,7 @@ class ZW3DCommandStdVuCreate(Tool):
 
 class ZW3DCommandStdVuDim(Tool):
     """
-    Tool for running ZW3D command for creating a standard view on the active drawing and dimension the Parallel lines.
+    Tool for running ZW3D command for creating a standard view on the active drawing and add dimensions to the view.
     """
     @property
     def name(self) -> str:
@@ -350,7 +347,7 @@ class ZW3DCommandStdVuDim(Tool):
     @property
     def description(self) -> str:
         return ("Execute ZW3D standard view create command, project the standard view into the active drawing on specific location."
-                "And auto dimension")
+                "add dimension to the view")
     @property
     def input_schema(self) -> Dict[str, Any]:
         return {
@@ -407,19 +404,13 @@ class ZW3DCommandStdVuDim(Tool):
             f'cmd=~STDVUDIM({json_str})'
         ]
 
-        print(cmd)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = CommandRun(cmd)
 
         # 调用 zw3dremote 后读取 JSON 文件
-        json_file_path = "C:/Users/gyj15/Desktop/zw3d/export/stdvu_output.json"
-        img_path = "C:/Users/gyj15/Desktop/zw3d/export/stdvu_output.png"
-        done_path = "C:/Users/gyj15/Desktop/zw3d/export/stdvu_output.done"
-
         return {
-            "img_path": img_path,
-            "done_path": done_path,
-            "geom_data": json_file_path, ###json data
+            "img_path": user_config.img_path,
+            "done_path": user_config.done_path,
+            "geom_data": user_config.json_file_path, ###json data
             "stderr": result.stderr.strip(),
             "return code": 1, ###return code 0: no error, 1: need response, <0: error
         }
@@ -525,9 +516,7 @@ class ZW3DCommandLinearDim(Tool):
             f'cmd=~LINDIM({json_str})'
         ]
 
-        print(cmd)
-
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = CommandRun(cmd)
 
         return {
             "stdout": result.stdout.strip(),
@@ -641,9 +630,234 @@ class ZW3DCommandLinearOffsetDim(Tool):
             f'cmd=~LINOFFSETDIM({json_str})'
         ]
 
-        print(cmd)
+        result = CommandRun(cmd)
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return {
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+            "return code": result.returncode
+        }
+    
+class ZW3DCommandArcLengthDimensionTool(Tool):
+    """
+    Creates a arc length dimension base on an arc curve in drawing.
+    """
+    @property
+    def name(self) -> str:
+        return "zw3d_create_arc_length_dimension"
+
+    @property
+    def description(self) -> str:
+        return """Creates a arc length dimension base on an arc curve in drawing
+                  Require Inputs:
+                      arc point:The point [x,y] on the arc that you want to add dimension.
+                      arc id:the id of the curve that the arc point should attach to, 'attach' means the point will move with the curve.
+                      text point:The point [x,y] to locate the first dimension text.
+               """
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "arc point": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "description": "The point [x,y] on the arc that you want to add dimension.",
+                    },
+                "arc id": {
+                    "type": "integer",
+                    "description": "the id of the curve that the arc point should attach to, 'attach' means the point will move with the curve.",
+                    "default" : -1
+                    },
+                "text point":{
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "description": "The point [x,y] to locate the first dimension text.",
+                }
+                },
+            "required": ["command"]
+        }
+
+    def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a arc length Dimension.
+
+        Args:
+            input: Dictionary containing:
+                arc point: The point [x,y] on the arc that you want to add dimension.
+                arc id: the id of the curve that the arc point should attach to, 'attach' means the point will move with the curve.
+                text point: The point [x,y] to locate the first dimension text.
+
+        Returns:
+            Dictionary containing error message and return code
+        """
+
+        command = 'ARCLENDIM'
+        json_str = json.dumps(input)
+
+        cmd = [
+            'zw3dremote',
+            '-r', 'local',
+            f'~{command}({json_str})'
+        ]
+        
+        result = CommandRun(cmd)
+
+        return {
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+            "return code": result.returncode
+        }
+    
+class ZW3DCommandRadialDimensionTool(Tool):
+    """
+    Creates a radial dimension base on an arc or circle in drawing.
+    """
+    @property
+    def name(self) -> str:
+        return "zw3d_create_radial_dimension"
+
+    @property
+    def description(self) -> str:
+        return """Creates a radial dimension base on an arc or circle in drawing
+                  Require Inputs:
+                      point:The point [x,y] on the arc or circle that you want to add dimension.
+                      id:the id of the curve that the point should attach to, 'attach' means the point will move with the curve.
+                      text point:The point [x,y] to locate the first dimension text.
+               """
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "point": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "description": "The point [x,y] on the arc or circle that you want to add radial dimension.",
+                    },
+                "id": {
+                    "type": "integer",
+                    "description": "the id of the curve that the dimension point should attach to, 'attach' means the point will move with the curve.",
+                    "default" : -1
+                    },
+                "text point":{
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "description": "The point [x,y] to locate the first dimension text",
+                }
+                },
+            "required": ["command"]
+        }
+
+    def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a radial Dimension.
+
+        Args:
+            input: Dictionary containing:
+                point: The point [x,y] on the arc or circle that you want to add dimension.
+                id: the id of the curve that the point should attach to, 'attach' means the point will move with the curve.
+                text point: The point [x,y] to locate the first dimension text.
+
+        Returns:
+            Dictionary containing error message and return code
+        """
+
+        command = 'RADIALDIM'
+        json_str = json.dumps(input)
+
+        cmd = [
+            'zw3dremote',
+            '-r', 'local',
+            f'~{command}({json_str})'
+        ]
+        
+        result = CommandRun(cmd)
+
+        return {
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+            "return code": result.returncode
+        }
+
+class ZW3DCommandHoleCalloutDimensionTool(Tool):
+    """
+    Creates a hole callout dimension base on an circle curve that is projected by a hole in drawing.
+    """
+    @property
+    def name(self) -> str:
+        return "zw3d_create_hole_callout_dimension"
+
+    @property
+    def description(self) -> str:
+        return """Creates a hole callout dimension base on circle that is projected by a hole in drawing,
+                  select a circle entity with its id, this tool will mark its information of quantities, radial, hole depth and so on.
+                  Require Inputs:
+                      hole curve id:the id of the circle curve that should be dimensioned.
+                      view id:the id of the view that the circle belongs to.
+                      text point:The point [x,y] to locate the first dimension text.
+               """
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "hole curve id": {
+                    "type": "integer",
+                    "description": "the id of the circle curve that should be dimensioned.",
+                    "default" : -1
+                    },
+                "view id": {
+                    "type": "integer",
+                    "description": "the id of the view that the circle belongs to.",
+                    "default" : -1
+                    },
+                "text point":{
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "description": "The point [x,y] to locate the first dimension text",
+                }
+                },
+            "required": ["command"]
+        }
+
+    def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a hole callout Dimension.
+
+        Args:
+            input: Dictionary containing:
+                hole curve id: the id of the circle curve that should be dimensioned.
+                view id: the id of the view that the circle belongs to.
+                text point: The point [x,y] to locate the first dimension text.
+
+        Returns:
+            Dictionary containing error message and return code
+        """
+
+        command = 'HOLECALLOUTDIM'
+        json_str = json.dumps(input)
+
+        cmd = [
+            'zw3dremote',
+            '-r', 'local',
+            f'~{command}({json_str})'
+        ]
+        
+        result = CommandRun(cmd)
 
         return {
             "stdout": result.stdout.strip(),

@@ -113,11 +113,11 @@ class GPTAutoDimensionAgent:
         client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         responses = ''
         functions = self._build_tool_specs()
-
+        
         while True:
             try:
                 response = client.chat.completions.create(
-                    model="gpt-4.1",
+                    model="gpt-4.1-mini",
                     messages=messages,
                     functions=functions,
                     function_call="auto",
@@ -135,6 +135,9 @@ class GPTAutoDimensionAgent:
             if message.function_call:
                 func_name = message.function_call.name
                 args = json.loads(message.function_call.arguments)
+                
+                print(f'dimension tool: {func_name}')
+                print(f'arg: {args}')
 
                 if func_name not in self.tools:
                     error = f"Tool '{func_name}' not registered."
@@ -150,6 +153,7 @@ class GPTAutoDimensionAgent:
                 except Exception as e:
                     result = f"Error running tool '{func_name}': {e}"
 
+                print(f'dimension tool run result: {str(result)}')
                 messages.append({
                     "role": "function",
                     "name": func_name,

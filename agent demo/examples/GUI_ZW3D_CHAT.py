@@ -8,6 +8,11 @@ import html
 import json
 from datetime import datetime
 import tiktoken
+import sys
+
+current_dir = os.path.dirname(os.path.abspath(__file__)) 
+par_dir = os.path.dirname(current_dir) 
+sys.path.append(par_dir) 
 from tools.deepseek_wrapper import DeepseekToolWrapper
 from tools.gpt_wrapper import GPTToolWrapper
 from tools import zw3d_command_tool

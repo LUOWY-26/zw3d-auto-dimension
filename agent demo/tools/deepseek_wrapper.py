@@ -194,7 +194,7 @@ Make sure to:
                         model="deepseek-reasoner",
                         messages=[
                             {"role": "system", "content": self._create_system_prompt()},
-                            {"role": "user", "content": f"{auto_dimension_prompts["dimension recommendation"]}, 请你根据标注建议，调用工具完成线性长度标注和线性距离标注。"}
+                            {"role": "user", "content": f'{auto_dimension_prompts["dimension recommendation"]}, 请你根据标注建议，调用工具完成线性长度标注和线性距离标注。'}
                         ]
                     )
                     reasoning = response.choices[0].message.reasoning_content
@@ -203,7 +203,7 @@ Make sure to:
                     tool_calls = self._extract_tool_calls(content)
 
                     if not tool_calls:
-                        return f"{return_str}{auto_dimension_prompts["dimension recommendation"]}\n\n还有什么可以帮你的吗？"
+                        return f'{return_str}{auto_dimension_prompts["dimension recommendation"]}\n\n还有什么可以帮你的吗？'
                         # return f"{reasoning}\n\nNo valid tool call was made."
 
                     for tool_call in tool_calls:

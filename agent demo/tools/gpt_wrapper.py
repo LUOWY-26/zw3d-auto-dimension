@@ -73,7 +73,9 @@ class GPTToolWrapper:
             if message.function_call:
                 func_name = message.function_call.name
                 args = json.loads(message.function_call.arguments)
-
+                
+                print(f"main tool: {func_name}")
+                
                 if func_name not in self.tools:
                     error = f"Tool '{func_name}' not registered."
                     messages.append({
