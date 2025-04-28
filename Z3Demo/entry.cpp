@@ -503,7 +503,8 @@ extern "C" __declspec(dllexport) int linearOffsetDimension(const char* jsonParam
 			dataOff.firstPoint.pointType = ZW_DRAWING_DIMENSION_MIDDLE_POINT;
 			dataOff.secondPoint.entityHandle = lineHdl1;
 			dataOff.firstPoint.entityHandle = lineHdl2;
-
+			dataOff.firstPoint.definingPoint = 0;
+			dataOff.secondPoint.definingPoint = 0;
 			dataOff.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
 			err = ZwDrawingDimensionLinearOffsetCreate(dataOff, NULL, NULL);
 
@@ -525,23 +526,23 @@ extern "C" __declspec(dllexport) int linearOffsetDimension(const char* jsonParam
 
 			if (curve1.type == ZW_CURVE_ARC || curve1.type == ZW_CURVE_CIRCLE)
 			{
-				//dataOff.secondPoint.entityHandle = lineHdl2;
 				dataOff.firstPoint.entityHandle = lineHdl1;
+				dataOff.secondPoint.entityHandle = lineHdl2;
 
-				dataOff.secondPoint.freePoint = firstPoint;
+				dataOff.firstPoint.freePoint = firstPoint;
 
 				szwPoint pointProject = projectPointToLine(firstPoint, curve2.curveInformation.line.startPoint, curve2.curveInformation.line.endPoint);
-				dataOff.firstPoint.freePoint = { pointProject.x, pointProject.y };
+				dataOff.secondPoint.freePoint = { pointProject.x, pointProject.y };
 			}
 			else
 			{
-				//dataOff.secondPoint.entityHandle = lineHdl1;
 				dataOff.firstPoint.entityHandle = lineHdl2;
+				dataOff.secondPoint.entityHandle = lineHdl1;
 
-				dataOff.secondPoint.freePoint = secondPoint;
+				dataOff.firstPoint.freePoint = secondPoint;
 				
 				szwPoint pointProject = projectPointToLine(secondPoint, curve1.curveInformation.line.startPoint, curve1.curveInformation.line.endPoint);
-				dataOff.firstPoint.freePoint = { pointProject.x, pointProject.y };
+				dataOff.secondPoint.freePoint = { pointProject.x, pointProject.y };
 			}
 			dataOff.firstPoint.definingPoint = 0;
 			dataOff.secondPoint.definingPoint = 0;
