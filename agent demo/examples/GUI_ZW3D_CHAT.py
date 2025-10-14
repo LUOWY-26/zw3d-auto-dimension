@@ -9,17 +9,22 @@ import json
 from datetime import datetime
 import tiktoken
 from tools.deepseek_wrapper import DeepseekToolWrapper
-from tools.gpt_wrapper import GPTToolWrapper
+# from tools.gpt_wrapper import GPTToolWrapper
+from LLMWrappers.GPT5Wrapper import GPTToolWrapper
 from tools import zw3d_command_tool
 from tools.tool_base import Tool
 import importlib
 import inspect
+import tkinter.messagebox as messagebox
 # from tools.zw3d_command_tool import ZW3DCommandTool, ZW3DCommandOpen, ZW3DCommandExpPDF, ZW3DCommandExpDWG, ZW3DCommandExp
 # from tools.zw3d_command_tool import ZW3DCommandStdVuCreate, ZW3DCommandSave
+from LLMWrappers.baseTool import register_all_tools
+import tools.zw3d_command_tool as tools_module
 
 class GUIAPP:
     def __init__(self, root, wrapper):
         self.wrapper = wrapper
+        register_all_tools(wrapper, tools_module)
         self.last_user_command = ""
 
         root.title("CHAT V1.0")
@@ -66,31 +71,34 @@ class GUIAPP:
 
         self.tab_control.bind("<<NotebookTabChanged>>", self.restore_last_user_command)
 
+        self.stop_thinking = threading.Event()
+
     def update_token_count(self, event=None):
         content = self.input_text.get("1.0", 'end').strip()
         enc = tiktoken.get_encoding("cl100k_base")
         token_count = len(enc.encode(content))
         self.token_label.config(text=f"Tokens: {token_count}")
 
-    def build_prompt_from_history(self, current_input, max_tokens=2048):
+    def build_prompt_from_history(self, current_input, max_tokens=1000000):
         enc = tiktoken.get_encoding("cl100k_base")
         session = self.get_current_session()
-        all_messages = []
-        for msg in session["history"]:
-            role = "用户" if msg["role"] == "user" else "助手"
-            all_messages.append(f"{role}：{msg['content']}")
-        all_messages.append(f"用户：{current_input}")
 
+        # 拿到历史消息
+        all_messages = session["history"].copy()
+        # # 加上当前用户输入
+        # all_messages.append({"role": "user", "content": current_input})
+
+        # 限制 token 数量
         accumulated = []
         total_tokens = 0
         for msg in reversed(all_messages):
-            tokens = enc.encode(msg)
+            tokens = enc.encode(msg["content"])
             if total_tokens + len(tokens) > max_tokens:
                 break
             accumulated.insert(0, msg)
             total_tokens += len(tokens)
 
-        return "\n".join(accumulated)
+        return accumulated
 
     def create_new_tab(self):
         frame = tk.Frame(self.tab_control, bg='#FFFFFF')
@@ -165,7 +173,9 @@ class GUIAPP:
 
         outer_frame.pack(anchor=align, pady=5, padx=10, fill='x')
         session["canvas"].update_idletasks()
-        session["canvas"].yview_moveto(1.0)
+
+        # 延迟滚动
+        session["canvas"].after(100, lambda: session["canvas"].yview_moveto(1.0))
 
         session["history"].append({"role": sender, "content": text})
 
@@ -193,14 +203,39 @@ class GUIAPP:
         self.input_text.insert(tk.INSERT, "\n")
         return "break"
 
+    def animate_thinking(self, label_widget):
+        dots = ""
+        while not self.stop_thinking.is_set():
+            dots += "."
+            if len(dots) > 3:
+                dots = ""
+            try:
+                label_widget.config(text=f"正在思考{dots}")
+            except:
+                break  # 防止界面被关闭后异常
+            time.sleep(0.5)  # 每0.5秒更新一次
+
     def run_llm(self, command):
-        thinking_label = self.add_message("正在思考...", sender="agent", return_label=True)
-        response = self.wrapper.execute(command)
-        formatted = self.preprocess_response(response)
-        self.animate_typing(thinking_label, formatted)
-        self.get_current_session()["history"][ -1]["content"] = formatted
-        self.input_text.config(state='normal')
-        self.send_button.config(state='normal')
+        thinking_label = self.add_message("正在思考...", sender="assistant", return_label=True)
+        prompt = self.build_prompt_from_history(command)
+
+        self.stop_thinking.clear()
+        threading.Thread(target=self.animate_thinking, args=(thinking_label,)).start()
+
+        try:
+            response = self.wrapper.run_dialog(prompt)
+            formatted = self.preprocess_response(response)
+            self.stop_thinking.set()
+            self.animate_typing(thinking_label, formatted)
+            self.get_current_session()["history"][-1]["content"] = formatted
+        except Exception as e:
+            self.stop_thinking.set()
+            import tkinter.messagebox as messagebox
+            messagebox.showerror("错误", f"请求失败：\n{str(e)}")
+            thinking_label.config(text="❌ 请求失败")
+        finally:
+            self.input_text.config(state='normal')
+            self.send_button.config(state='normal')
 
     def animate_typing(self, label, full_text):
         label.config(text="")
@@ -224,21 +259,26 @@ class GUIAPP:
             self.execute_command()
 
     def preprocess_response(self, text):
-        import re
-        text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
-        text = re.sub(r"`([^`]*)`", r"[代码: \1]", text)
-        return text
+        # import re
+        # text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+        # text = re.sub(r"`([^`]*)`", r"[代码: \1]", text)
+        return text["response"]
 
     def save_chat_history(self):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = f"chat_{timestamp}"
+        now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        tab_index = self.tab_control.index(self.tab_control.select()) + 1
+        filename = f"chat_history_{now}_会话{tab_index}.json"
         history = self.get_current_session()["history"]
-        with open(f"{base}.json", "w", encoding="utf-8") as f:
-            json.dump(history, f, indent=2, ensure_ascii=False)
-        with open(f"{base}.md", "w", encoding="utf-8") as f:
-            for msg in history:
-                role = "🤖" if msg["role"] == "agent" else "👤"
-                f.write(f"**{role}**:\n\n{msg['content']}\n\n---\n\n")
+        try:
+            with open(f"{filename}.json", "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+            with open(f"{filename}.md", "w", encoding="utf-8") as f:
+                for msg in history:
+                    role = "🤖" if msg["role"] == "agent" else "👤"
+                    f.write(f"**{role}**:\n\n{msg['content']}\n\n---\n\n")
+            messagebox.showinfo("保存成功", f"聊天记录已保存为：\n{filename}")
+        except Exception as e:
+            messagebox.showerror("保存失败", f"出现错误：\n{str(e)}")
 
     def restore_last_user_command(self, event=None):
         last = self.get_current_session()["last_user_command"]
@@ -247,22 +287,19 @@ class GUIAPP:
 
 
 
-def register_all_tools(wrapper):
-    for name, obj in inspect.getmembers(zw3d_command_tool):
-        if inspect.isclass(obj) and issubclass(obj, Tool) and obj is not Tool:
-            try:
-                wrapper.register_tool(obj())
-                print(f"✅ 注册工具: {obj.__name__}")
-            except Exception as e:
-                print(f"❌ 注册失败: {obj.__name__}, 原因: {e}")
+# def register_all_tools(wrapper):
+#     for name, obj in inspect.getmembers(zw3d_command_tool):
+#         if inspect.isclass(obj) and issubclass(obj, Tool) and obj is not Tool:
+#             try:
+#                 wrapper.register_tool(obj())
+#                 print(f"✅ 注册工具: {obj.__name__}")
+#             except Exception as e:
+#                 print(f"❌ 注册失败: {obj.__name__}, 原因: {e}")
 
 
 if __name__ == "__main__":
     # wrapper = DeepseekToolWrapper()
-    # register_all_tools(wrapper)
-
     wrapper = GPTToolWrapper()
-    register_all_tools(wrapper)
 
     root = tk.Tk()
     app = GUIAPP(root, wrapper)
