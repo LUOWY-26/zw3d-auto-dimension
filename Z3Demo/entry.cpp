@@ -1,9 +1,283 @@
 #include "pch.h"
 #include "json.hpp"
 #include "zwapi_drawing_dimension.h"
-#include<fstream>
+#include "log_utils.h"
+#include <random>
+#include <cmath>
+#include <algorithm>
+#include <thread>      // std::this_thread::sleep_for
+#include <chrono>      // std::chrono::seconds
+
+
+#include <cmath>
+#include <limits>
+
+// 判断两个浮点数是否相等（近似）
+bool almostEqual(double a, double b, double epsilon = 0.01/*std::numeric_limits<double>::epsilon()*/)
+{
+	// fabs(a-b) 与 epsilon 比较，同时考虑到数值大小缩放
+	return std::fabs(a - b) <= epsilon /** std::fmax(1.0, std::fmax(std::fabs(a), std::fabs(b)))*/;
+}
 
 using json = nlohmann::json;
+
+szwMatrix computeFrame(double spread = 100.0) {
+	static std::random_device rd;
+	static std::mt19937 gen(rd());
+	std::uniform_real_distribution<> dis(-spread, spread);
+
+	szwMatrix mat{};
+	mat.identity = 0;
+
+	mat.xx = 1; mat.yx = 0; mat.zx = 0; mat.xt = dis(gen);
+	mat.xy = 0; mat.yy = 1; mat.zy = 0; mat.yt = dis(gen);
+	mat.xz = 0; mat.yz = 0; mat.zz = 1; mat.zt = dis(gen);
+
+	mat.ox = 0; mat.oy = 0; mat.oz = 0; mat.scale = 1.0;
+	return mat;
+}
+
+std::string makeAsmName(const std::string& dir, int level) {
+	return dir + "asm_lvl" + std::to_string(level) + ".Z3ASM";
+}
+
+std::vector<int> randomSplitTotal(int total, int depth) {
+	std::vector<int> result(depth, 1);
+	int remaining = total - depth;
+
+	static std::random_device rd;
+	static std::mt19937 gen(rd());
+
+	for (int i = 0; i < depth; ++i) {
+		int maxAlloc = remaining - (depth - 1 - i);
+		std::uniform_int_distribution<> dis(0, maxAlloc);
+		int r = dis(gen);
+		result[i] += r;
+		remaining -= r;
+	}
+
+	// 随机打乱层之间顺序（可选）
+	std::shuffle(result.begin(), result.end(), gen);
+
+	return result;
+}
+
+extern "C" __declspec(dllexport)
+int createAssemblyTree(const char* jsonParams) {
+	try {
+		json params = json::parse(jsonParams);
+		std::string partPath = params["partPath"];
+		std::string saveDir = params["saveDir"];
+		int depth = params["depth"];
+		int total = params["totalInstances"];
+
+		evxErrors err;
+
+		auto perLayer = randomSplitTotal(total, depth);
+
+		std::vector<std::string> asmPaths;
+
+		for (int d = 0; d < depth; ++d) {
+			std::string asmPath = makeAsmName("", d);
+			vxLongPath asmFile;
+			strcpy_s(asmFile, sizeof(vxLongPath), asmPath.c_str());
+			err = cvxFileNew(asmFile);
+			err = cvxFileSaveAs((saveDir + "\\" + asmFile).c_str());
+
+			int insertCount = perLayer[d];
+
+			for (int j = 0; j < insertCount; ++j) {
+				szwComponentInsertData data;
+				err = ZwComponentInsertInit(&data);
+				strcpy_s(data.pathFile, sizeof(data.pathFile), partPath.c_str());
+				szwMatrix mat = computeFrame(300);
+				data.frame = &mat;
+				err = ZwComponentInsert(data, nullptr, nullptr);
+			}
+
+			asmPaths.push_back(asmPath);
+		}
+
+		std::string topAsm = "root.Z3ASM";
+		vxLongPath topPath;
+		strcpy_s(topPath, sizeof(vxLongPath), topAsm.c_str());
+		err = cvxFileNew(topPath);
+		err = cvxFileSaveAs((saveDir + "\\" + topAsm).c_str());
+
+		for (const auto& asmFile : asmPaths) {
+			szwComponentInsertData data;
+			err = ZwComponentInsertInit(&data);
+			strcpy_s(data.pathFile, sizeof(data.pathFile), asmFile.c_str());
+			szwMatrix mat = computeFrame(300);
+			data.frame = &mat;
+			err = ZwComponentInsert(data, nullptr, nullptr);
+			err = cvxFileActivate(asmFile.c_str());
+		}
+		for (const auto& asmFile : asmPaths)
+		{
+			err = cvxFileActivate(asmFile.c_str());
+			cvxFileClose2(asmFile.c_str(), 1);
+		}
+		err = cvxFileActivate(topAsm.c_str());
+		cvxFileClose2(topAsm.c_str(), 1);
+		if (err != ZW_API_NO_ERROR) {
+			WriteLog("[console]Assembly created");
+			json result;
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		}
+		return 0;
+	}
+	catch (const std::exception& e) {
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		return -1;
+	}
+}
+
+int insertComponent(const char* jsonParams)
+{
+	try {
+		json params = json::parse(jsonParams);
+		std::string path = params["path"];
+
+		evxErrors err;
+
+		szwComponentInsertData data;
+		err = ZwComponentInsertInit(&data);
+		strcpy_s(data.pathFile, sizeof(data.pathFile), path.c_str());
+		szwMatrix mat = computeFrame(300);
+		data.frame = &mat;
+		err = ZwComponentInsert(data, nullptr, nullptr);
+
+		if (err != ZW_API_NO_ERROR) {
+			WriteLog("[console]Insert component");
+			json result;
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		}
+		return 0;
+	}
+	catch (const std::exception& e) {
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		return -1;
+	}
+}
+
+int activateFile(const char* jsonParams)
+{
+	try {
+		json params = json::parse(jsonParams);
+		std::string filePath = params["filePath"];
+
+		evxErrors err;
+
+		err = cvxFileActivate(filePath.c_str());
+		if (err != ZW_API_NO_ERROR) {
+			WriteLog("[console]Activate file");
+			json result;
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		}
+		return 0;
+	}
+	catch (const std::exception& e) {
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		return -1;
+	}
+}
+
+int inqActiveFile(const char* jsonParams)
+{
+	try {
+		json params = json::parse(jsonParams);
+		evxErrors err = ZW_API_NO_ERROR;
+		std::string fileName;
+		vxLongName activeFileName;
+		activeFileName[0] = 0;
+		cvxFileInqActive(activeFileName, sizeof(activeFileName));
+
+		if (err != ZW_API_NO_ERROR) {
+			WriteLog("[console]{activeFile=%s}", activeFileName);
+			json result;
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		}
+		return 0;
+	}
+	catch (const std::exception& e) {
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		return -1;
+	}
+}
+
+int newFile(const char* jsonParams)
+{
+	try {
+		json params = json::parse(jsonParams);
+		std::string savePath = params["savePath"];
+
+		evxErrors err;
+
+		size_t pos = savePath.find_last_of("/\\");
+		std::string saveDir = (pos != std::string::npos) ? savePath.substr(0, pos) : "";
+		std::string fileName = (pos != std::string::npos) ? savePath.substr(pos + 1) : savePath;
+		err = cvxFileNew(fileName.c_str());
+		err = cvxFileSaveAs((saveDir + "\\" + fileName).c_str());
+		if (err != ZW_API_NO_ERROR) {
+			WriteLog("[console]New file");
+			json result;
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		}
+		return 0;
+	}
+	catch (const std::exception& e) {
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		return -1;
+	}
+}
+
+int inqActiveDir(const char* jsonParams)
+{
+	try {
+		json params = json::parse(jsonParams);
+		evxErrors err = ZW_API_NO_ERROR;
+		vxPath activeFileDir;
+		activeFileDir[0] = 0;
+		cvxFileDirectory(activeFileDir);
+
+		if (err != ZW_API_NO_ERROR) {
+			WriteLog("[console]{activeDir=%s}", activeFileDir);
+			json result;
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		}
+		return 0;
+	}
+	catch (const std::exception& e) {
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+		return -1;
+	}
+}
+
 
 extern "C" __declspec(dllexport) int autoDimension(const char* jsonParams) {
 	try {
@@ -15,7 +289,7 @@ extern "C" __declspec(dllexport) int autoDimension(const char* jsonParams) {
 		/* rootName get from path */
 		size_t lastSlashPos = path.find_last_of("/\\");
 		std::string fileName = (lastSlashPos == std::string::npos) ? path : path.substr(lastSlashPos + 1);
-		int lastDotPos = fileName.find_last_of('.');
+		size_t lastDotPos = fileName.find_last_of('.');
 		std::string rootName = (lastDotPos == std::string::npos) ? fileName : fileName.substr(0, lastDotPos);
 
 		err = cvxRootActivate2(path.c_str(), rootName.c_str());
@@ -40,7 +314,10 @@ extern "C" __declspec(dllexport) int autoDimension(const char* jsonParams) {
 			err = ZwDrawingDimensionAutoCreate(stdVu, autoDim, &dimCount, &dims);
 
 			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
+				WriteLog("[console]Auto dimension");
+				json result;
+				result["return code"] = 0;
+				WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 			}
 		}
 		else 
@@ -52,7 +329,10 @@ extern "C" __declspec(dllexport) int autoDimension(const char* jsonParams) {
 			{
 				err = ZwDrawingDimensionAutoCreate(pViews[i], autoDim, &dimCount, NULL);
 				if (err != ZW_API_NO_ERROR) {
-					WriteMessage("err code = %i", static_cast<int>(err));
+					WriteLog("[console]Auto dimension");
+					json result;
+					result["return code"] = 0;
+					WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 				}
 			}
 		}
@@ -62,7 +342,10 @@ extern "C" __declspec(dllexport) int autoDimension(const char* jsonParams) {
 		return static_cast<int>(err);
 	}
 	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;
 	}
 }
@@ -78,7 +361,7 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 		/* rootName get from path */
 		size_t lastSlashPos = path.find_last_of("/\\");
 		std::string fileName = (lastSlashPos == std::string::npos) ? path : path.substr(lastSlashPos + 1);
-		int lastDotPos = fileName.find_last_of('.');
+		size_t lastDotPos = fileName.find_last_of('.');
 		std::string rootName = (lastDotPos == std::string::npos) ? fileName : fileName.substr(0, lastDotPos);
 
 		evxErrors err;
@@ -95,10 +378,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxImgData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -107,10 +386,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxPdfData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -119,10 +394,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxGRPData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -131,10 +402,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxDWGData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -143,10 +410,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxIGESData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -155,10 +418,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxSTEPData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -167,10 +426,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxJTData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -180,10 +435,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxPARAData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -193,10 +444,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxCAT5Data data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -205,10 +452,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxHTMLData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -217,10 +460,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxSTLData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -229,10 +468,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxOBJData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -242,10 +477,6 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 			svxIDFData data{};
 			evxExportType eType = (evxExportType)type;
 			err = cvxFileExportInit(eType, subType, &data);
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-			}
-
 			err = cvxFileExport(eType, exportPath, &data);
 			break;
 		}
@@ -254,7 +485,10 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 		}
 
 		if (err == ZW_API_NO_ERROR) {
-			WriteMessage("[console] export complete.");
+			WriteLog("[console] export complete.");
+			json result;
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		}
 
 		err = cvxRootActivate2(NULL, NULL);
@@ -262,14 +496,19 @@ extern "C" __declspec(dllexport) int fileExport(const char* jsonParams) {
 		return static_cast<int>(err);
 	}
 	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;
 	}
 }
 
 extern "C" __declspec(dllexport) int fileOpen(const char* jsonParams) {
+	json result;
 	try {
 		json params = json::parse(jsonParams);
+
 		std::string filePath = params["filePath"].get<std::string>();
 		vxLongPath openPath;
 		strcpy_s(openPath, sizeof(vxLongPath), filePath.c_str());
@@ -277,6 +516,7 @@ extern "C" __declspec(dllexport) int fileOpen(const char* jsonParams) {
 		size_t lastSlashPos = filePath.find_last_of("/\\");
 		std::string fileName = (lastSlashPos == std::string::npos) ? filePath : filePath.substr(lastSlashPos + 1);
 
+		printf("open file get data");
 		evxErrors err;
 
 		char openFileName[256];
@@ -284,7 +524,9 @@ extern "C" __declspec(dllexport) int fileOpen(const char* jsonParams) {
 
 		if (!strcmp(fileName.c_str(), openFileName))
 		{
-			WriteMessage("[console] file already opened.");
+			WriteLog("[console] file already opened.");
+			result["return code"] = -1;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 			return ZW_API_NO_ERROR;
 		}
 
@@ -292,12 +534,16 @@ extern "C" __declspec(dllexport) int fileOpen(const char* jsonParams) {
 		err = cvxFileOpen(openPath);
 		if (err == ZW_API_NO_ERROR)
 		{
-			WriteMessage("[console] open complete.");
+			WriteLog("[console] open complete.");
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		}
 		return static_cast<int>(err);
 	}
 	catch(const std::exception& e){
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;  
 	}
 }
@@ -309,12 +555,18 @@ extern "C" __declspec(dllexport) int fileSaveOrClose(const char* jsonParams) {
 		evxErrors err = cvxFileSave3(close, 1, 0);
 		if (err == ZW_API_NO_ERROR)
 		{
-			WriteMessage("[console] save complete.");
+			WriteLog("[console] save complete.");
+			json result;
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		}
 		return static_cast<int>(err);
 	}
 	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;
 	}
 }
@@ -395,7 +647,7 @@ extern "C" __declspec(dllexport) int standardViewCreate(const char* jsonParams) 
 		{
 			if (suffixName == "Z3ASM" || suffixName == "Z3PRT")
 			{
-				WriteMessage("newFile: %s", (rootName + ".Z3DRW").c_str());
+				WriteLog("newFile: %s", (rootName + ".Z3DRW").c_str());
 				err = cvxFileOpen((rootName + ".Z3DRW").c_str());
 				if (err != 0)
 				{
@@ -404,7 +656,7 @@ extern "C" __declspec(dllexport) int standardViewCreate(const char* jsonParams) 
 			}
 			else 
 			{
-				WriteMessage("newFile: %s", (rootName + ".Z3DRW").c_str());
+				WriteLog("newFile: %s", (rootName + ".Z3DRW").c_str());
 				err = cvxFileOpen((rootName + ".Z3DRW").c_str());
 				if (err != 0)
 				{
@@ -422,28 +674,32 @@ extern "C" __declspec(dllexport) int standardViewCreate(const char* jsonParams) 
 		szwViewStandardData stdVuData;
 
 		err = ZwDrawingViewStandardDataInit(&stdVuData);
-
-		if (err != ZW_API_NO_ERROR) {
-			WriteMessage("err code = %i", static_cast<int>(err));
-		}
-
 		strcpy_s(stdVuData.path, sizeof(zwPath), path.c_str());
 		strcpy_s(stdVuData.rootName, sizeof(zwRootName), rootName.c_str());
 		stdVuData.type = (ezwStandardViewType)0;
 		stdVuData.location = location;
 		stdVuData.option.viewType = (ezwDrawingViewMethod)type;
 
+		stdVuData.scaleType = ZW_VIEW_USE_SHEET_SCALE;
+		stdVuData.viewAttribute.scaleRatioX = 1;
+		stdVuData.viewAttribute.scaleRatioY = 5;
+
 		szwEntityHandle stdVu;
 		err = ZwDrawingViewStandardCreate(stdVuData, &stdVu);
 
 		if (err != ZW_API_NO_ERROR) {
-			WriteMessage("err code = %i", static_cast<int>(err));
+			WriteLog("[console] std view created.");
+			json result;
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		}
-		WriteMessage("[console] std view created.");
 		return static_cast<int>(err);
 	}
 	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;
 	}
 }
@@ -478,8 +734,8 @@ extern "C" __declspec(dllexport) int linearOffsetDimension(const char* jsonParam
 		int lineId1 = params["id1"].get<int>();
 		int lineId2 = params["id2"].get<int>();
 
-		szwPoint2 firstPoint = { params["first point"]["x"].get<double>(), params["first point"]["y"].get<double>()};
-		szwPoint2 secondPoint = { params["second point"]["x"].get<double>(), params["second point"]["y"].get<double>()};
+		szwPoint firstPoint = { params["first point"]["x"].get<double>(), params["first point"]["y"].get<double>()};
+		szwPoint secondPoint = { params["second point"]["x"].get<double>(), params["second point"]["y"].get<double>()};
 		szwPoint textPoint = { params["text point"]["x"].get<double>(), params["text point"]["y"].get<double>(), 0 };
 
 		ezwErrors err;
@@ -495,7 +751,7 @@ extern "C" __declspec(dllexport) int linearOffsetDimension(const char* jsonParam
 		ZwCurveNURBSDataGet(lineHdl2, 1, &curve2);
 
 		//special case, two line distance
-		if (curve1.type == ZW_CURVE_LINE && curve2.type == ZW_CURVE_LINE)
+		if (curve1.type == ZW_CURVE_LINE && curve2.type == ZW_CURVE_LINE && lineId1 != lineId2)
 		{
 			szwDrawingLinearOffsetDimension dataOff;
 			dataOff.type = (ezwDimensionLinearOffsetType)1;
@@ -506,108 +762,90 @@ extern "C" __declspec(dllexport) int linearOffsetDimension(const char* jsonParam
 			dataOff.firstPoint.definingPoint = 0;
 			dataOff.secondPoint.definingPoint = 0;
 			dataOff.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
-			err = ZwDrawingDimensionLinearOffsetCreate(dataOff, NULL, NULL);
+			err = ZwDrawingDimensionLinearOffsetCreate(dataOff, NULL);
 
 			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i, line to line", static_cast<int>(err));
-				WriteMessage("may has err id: %i, %i", lineId1, lineId2);
+				WriteLog("err code = %i, line to line", static_cast<int>(err));
+				WriteLog("may has err id: %i, %i", lineId1, lineId2);
 			}
-			WriteMessage("[console] linear offset dimension created.");
+			WriteLog("[console] linear offset dimension created.{%i, %i}", lineId1, lineId2);
+			json result;
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 			return static_cast<int>(err);
 		}
+		else {
+			szwDrawingLinearDimension data;
+			data.type = ZW_DIMENSION_LINEAR_ALIGNED;
+			data.firstPoint = { &lineHdl1, ZW_CRITICAL_FREE_POINT, 0, &firstPoint };
+			data.secondPoint = { &lineHdl2, ZW_CRITICAL_FREE_POINT, 0, &secondPoint };
+			data.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
 
-		else if(curve1.type == ZW_CURVE_LINE || curve2.type == ZW_CURVE_LINE)
-		{
-			szwDrawingLinearOffsetDimension dataOff;
-			dataOff.type = (ezwDimensionLinearOffsetType)2;
-			
-			dataOff.firstPoint.pointType = ZW_DRAWING_DIMENSION_ARC_CENTER;
-			dataOff.secondPoint.pointType = ZW_DRAWING_DIMENSION_FREE_POINT;
-
-			if (curve1.type == ZW_CURVE_ARC || curve1.type == ZW_CURVE_CIRCLE)
+			if (lineId1 == lineId2)
 			{
-				dataOff.firstPoint.entityHandle = lineHdl1;
-				dataOff.secondPoint.entityHandle = lineHdl2;
-
-				dataOff.firstPoint.freePoint = firstPoint;
-
-				szwPoint pointProject = projectPointToLine(firstPoint, curve2.curveInformation.line.startPoint, curve2.curveInformation.line.endPoint);
-				dataOff.secondPoint.freePoint = { pointProject.x, pointProject.y };
+				if (almostEqual(firstPoint.x, secondPoint.x))
+				{
+					data.type = ZW_DIMENSION_LINEAR_VERTICAL;
+				}
+				else if (almostEqual(firstPoint.y, secondPoint.y))
+				{
+					data.type = ZW_DIMENSION_LINEAR_HORIZONTAL;
+				}
+			}
+			else if (lineId1 != 0 && curve1.type == ZW_CURVE_LINE)
+			{
+				if (almostEqual(curve1.curveInformation.line.startPoint.x, curve1.curveInformation.line.endPoint.x))
+				{
+					data.type = ZW_DIMENSION_LINEAR_HORIZONTAL;
+				}
+				else if (almostEqual(curve1.curveInformation.line.startPoint.y, curve1.curveInformation.line.endPoint.y))
+				{
+					data.type = ZW_DIMENSION_LINEAR_VERTICAL;
+				}
+			}
+			else if (lineId2 != 0 && curve2.type == ZW_CURVE_LINE)
+			{
+				if (almostEqual(curve2.curveInformation.line.startPoint.x, curve2.curveInformation.line.endPoint.x))
+				{
+					data.type = ZW_DIMENSION_LINEAR_HORIZONTAL;
+				}
+				else if (almostEqual(curve2.curveInformation.line.startPoint.y, curve2.curveInformation.line.endPoint.y))
+				{
+					data.type = ZW_DIMENSION_LINEAR_VERTICAL;
+				}
 			}
 			else
 			{
-				dataOff.firstPoint.entityHandle = lineHdl2;
-				dataOff.secondPoint.entityHandle = lineHdl1;
-
-				dataOff.firstPoint.freePoint = secondPoint;
-				
-				szwPoint pointProject = projectPointToLine(secondPoint, curve1.curveInformation.line.startPoint, curve1.curveInformation.line.endPoint);
-				dataOff.secondPoint.freePoint = { pointProject.x, pointProject.y };
-			}
-			dataOff.firstPoint.definingPoint = 0;
-			dataOff.secondPoint.definingPoint = 0;
-			dataOff.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
-			err = ZwDrawingDimensionLinearOffsetCreate(dataOff, NULL, NULL);
-
-			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i, point to line", static_cast<int>(err));
-				WriteMessage("may has err id: %i, %i", lineId1, lineId2);
-			}
-			WriteMessage("[console] linear offset dimension created.");
-			return static_cast<int>(err);
-		}
-
-		else {
-
-			szwDrawingLinearDimension data;
-			data.type = ZW_DIMENSION_LINEAR_ALIGNED;
-
-			data.firstPoint.referenceEntityHandle = &lineHdl1;
-			data.secondPoint.referenceEntityHandle = &lineHdl2;
-			data.firstPoint.controlPointIndex = 0;
-			data.secondPoint.controlPointIndex = 0;
-			data.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
-
-			if (curve1.type == ZW_CURVE_ARC || curve1.type == ZW_CURVE_CIRCLE)
-			{
-				data.firstPoint.criticalPointType = ZW_CRITICAL_CENTER_POINT;
-				szwPoint circleCenter = { firstPoint.x, firstPoint.y, 0 };
-				data.firstPoint.point = &circleCenter;
-			}
-			else if (curve1.type == ZW_CURVE_LINE)
-			{
-				data.firstPoint.criticalPointType = ZW_CRITICAL_FREE_POINT;
-				szwPoint pointProject = projectPointToLine(secondPoint, curve1.curveInformation.line.startPoint, curve1.curveInformation.line.endPoint);
-				data.firstPoint.point = &pointProject;
-			}
-
-			if (curve2.type == ZW_CURVE_ARC || curve2.type == ZW_CURVE_CIRCLE)
-			{
-				data.secondPoint.criticalPointType = ZW_CRITICAL_CENTER_POINT;
-				szwPoint circleCenter = { secondPoint.x, secondPoint.y, 0 };
-				data.secondPoint.point = &circleCenter;
-			}
-			else if (curve2.type == ZW_CURVE_LINE)
-			{
-				data.secondPoint.criticalPointType = ZW_CRITICAL_FREE_POINT;
-				szwPoint pointProject = projectPointToLine(firstPoint, curve2.curveInformation.line.startPoint, curve2.curveInformation.line.endPoint);
-				data.secondPoint.point = &pointProject;
+				if (almostEqual(firstPoint.x, secondPoint.x))
+				{
+					data.type = ZW_DIMENSION_LINEAR_VERTICAL;
+				}
+				else if (almostEqual(firstPoint.y, secondPoint.y))
+				{
+					data.type = ZW_DIMENSION_LINEAR_HORIZONTAL;
+				}
 			}
 
 			szwEntityHandle out;
-			err = ZwDrawingDimensionLinearCreate(data, nullptr, &out);
+			err = ZwDrawingDimensionLinearCreate(data, &out);
 
 			if (err != ZW_API_NO_ERROR) {
-				WriteMessage("err code = %i", static_cast<int>(err));
-				WriteMessage("may has err id: %i, %i", lineId1, lineId2);
+				WriteLog("err code = %i", static_cast<int>(err));
+				WriteLog("may has err id: %i, %i", lineId1, lineId2);
 			}
 
-			WriteMessage("[console] distance dimension created.");
+			WriteLog("[console] distance dimension created.{%i, %i}", lineId1, lineId2);
+			json result;
+			result["return code"] = 0;
+			WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 			return static_cast<int>(err);
 		}
 	}
 	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;
 	}
 }
@@ -629,30 +867,36 @@ extern "C" __declspec(dllexport) int linearDimension(const char* jsonParams) {
 		szwDrawingLinearDimension data;
 		data.type = ZW_DIMENSION_LINEAR_ALIGNED;
 
-		if (lineId != 0)
+		err = ZwApiIdtoHandle(lineId, &lineHdl);
+
+		szwCurve curve1;
+		ZwCurveNURBSDataGet(lineHdl, 1, &curve1);
+
+
+		if (lineId != 0 && curve1.type == ZW_CURVE_LINE)
 		{
-			err = ZwApiIdtoHandle(lineId, &lineHdl);
-			data.firstPoint = { &lineHdl, ZW_CRITICAL_FREE_POINT, 0, &startPoint};
-			data.secondPoint = { &lineHdl, ZW_CRITICAL_FREE_POINT, 0, &endPoint};
-		}
-		else
-		{
-			data.firstPoint = { NULL, ZW_CRITICAL_FREE_POINT ,0,&startPoint };
-			data.secondPoint = { NULL, ZW_CRITICAL_FREE_POINT ,0,&endPoint };
+			data.firstPoint = { &lineHdl, ZW_CRITICAL_START_POINT, 0, &startPoint };
+			data.secondPoint = { &lineHdl, ZW_CRITICAL_END_POINT, 0, &endPoint };
 		}
 		data.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
 
 		szwEntityHandle out;
-		err = ZwDrawingDimensionLinearCreate(data, nullptr, &out);
+		err = ZwDrawingDimensionLinearCreate(data, &out);
 
 		if (err != ZW_API_NO_ERROR) {
-			WriteMessage("err code = %i", static_cast<int>(err));
+			WriteLog("err code = %i", static_cast<int>(err));
 		}
-		WriteMessage("[console] linear dimension created.");
+		WriteLog("[console] linear dimension created. {%i}", lineId);
+		json result;
+		result["return code"] = 0;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return static_cast<int>(err);
 	}
 	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;
 	}
 }
@@ -714,163 +958,21 @@ extern "C" __declspec(dllexport) int drwGetEntData(const char* jsonParams) {
 				viewGeom["entities"].push_back(ent);
 			}
 		}
+		WriteLog("[console]Get drawing entities data");
+		json result;
+		result["return code"] = 0;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return static_cast<int>(err);
 	}
 	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;
 	}
 }
 
-extern "C" __declspec(dllexport) void getViewLines1(szwEntityHandle * pViews, int cnt_view)
-{
-	try {
-		//int cnt_view = 0;
-		//szwEntityHandle* pViews;
-		//ZwDrawingSheetViewListGet(nullptr, ZW_DRAWING_ALL_VIEW, &cnt_view, &pViews);
-
-		string jstr;
-		json jVus{};
-		for (int j = 0; j < cnt_view; j++)
-		{
-			json jVu;
-			jVu["view id"] = ZwApiHandleToId(pViews[j]);
-			jVu["curves"] = {};
-
-			int cnt_geom = 0;
-			szwEntityHandle* pGeoms;
-			ezwErrors err = ZwDrawingViewGeometryListGet(pViews[0], ZW_DRAWING_SHOWN_GEOMETRY_COORESPONDING_EDGE_AND_FACE, &cnt_geom, &pGeoms);
-			for (int i = 0; i < cnt_geom; i++)
-			{
-				json jCrv;
-				szwCurve curve;
-				ZwCurveNURBSDataGet(pGeoms[i], 1, &curve);
-				switch (curve.type)
-				{
-				case ZW_CURVE_LINE:
-					jCrv["curve id"] = ZwApiHandleToId(pGeoms[i]);
-					jCrv["type"] = "line";
-					jCrv["data"] = json();
-					jCrv["data"]["start point"] = { curve.curveInformation.line.startPoint.x,curve.curveInformation.line.startPoint.y };
-					jCrv["data"]["end point"] = { curve.curveInformation.line.endPoint.x,curve.curveInformation.line.endPoint.y };
-					break;
-				case ZW_CURVE_ARC:
-					jCrv["curve id"] = ZwApiHandleToId(pGeoms[i]);
-					jCrv["type"] = "arc";
-					jCrv["data"] = json();
-					jCrv["data"]["radius"] = curve.curveInformation.arc.radius;
-					jCrv["data"]["start point"] = { curve.curveInformation.arc.startPoint.x,curve.curveInformation.arc.startPoint.y };
-					jCrv["data"]["end point"] = { curve.curveInformation.arc.endPoint.x,curve.curveInformation.arc.endPoint.y };
-					jCrv["data"]["start angle"] = curve.curveInformation.arc.startAngle;
-					jCrv["data"]["end angle"] = curve.curveInformation.arc.endAngle;
-					jCrv["data"]["center point"] = { curve.curveInformation.arc.centerPoint.x,curve.curveInformation.arc.centerPoint.y };
-					break;
-				case ZW_CURVE_CIRCLE:
-					jCrv["curve id"] = ZwApiHandleToId(pGeoms[i]);
-					jCrv["type"] = "arc";
-					jCrv["data"] = json();
-					jCrv["data"]["radius"] = curve.curveInformation.circle.radius;
-					jCrv["data"]["center point"] = { curve.curveInformation.circle.centerPoint.x,curve.curveInformation.circle.centerPoint.y };
-					break;
-				default:
-					continue;
-				}
-				jVu["curves"].push_back(jCrv);
-			}
-			jVus.push_back(jVu);
-		}
-		//ZwEntityHandleListFree(cnt_view, &pViews);
-		jstr = jVus.dump(4);
-
-		std::ofstream out("C:/Users/lwy/Desktop/stdvu_output.json");
-		if (out.is_open())
-		{
-			out << jstr;
-			out.close();
-		}
-
-		std::ofstream done("C:/Users/lwy/Desktop/stdvu_output.done");
-		done << "done";
-		done.close();
-
-		return;
-	}
-	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
-		return;
-	}
-}
-
-extern "C" __declspec(dllexport) void getViewLines2(szwEntityHandle stdVu, int type)
-{
-	ezwErrors err;
-	json viewGeom;
-
-	viewGeom["view"] = type;
-	viewGeom["entities"] = json::array();
-
-	szwEntityHandle* ents;
-	int entNum;
-	ZwDrawingViewGeometryListGet(stdVu, (ezwDrawingGeometryType)2, &entNum, &ents);
-
-	for (int i = 0; i < entNum; i++)
-	{
-		szwEntityHandle entHandle1 = ents[i];
-		int pointsNum;
-		szwEntityCriticalPointInfo* pointsInfo;
-		err = ZwEntityCriticalPointInfoGet(entHandle1, &pointsNum, &pointsInfo);
-
-		int id = 0;
-		id = ZwApiHandleToId(entHandle1);
-		json ent;
-		ent["id"] = id;
-		if (pointsNum == 3)
-		{
-			ent["type"] = "line";
-			ent["start"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
-			ent["end"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
-			ent["middle"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
-		}
-		else if (pointsNum == 4)
-		{
-			ent["type"] = "arc";
-			ent["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
-			ent["start"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
-			ent["end"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
-			ent["middle"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
-		}
-		else if (pointsNum == 5)
-		{
-			ent["type"] = "circle";
-			ent["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
-			ent["0degree"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
-			ent["90degree"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
-			ent["180degree"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
-			ent["270degree"] = { pointsInfo[4].point.x, pointsInfo[4].point.y };
-		}
-		viewGeom["entities"].push_back(ent);
-	}
-	WriteMessage("entities num = %i", static_cast<int>(entNum));
-	ZwEntityHandleListFree(entNum, &ents);
-
-	if (err != ZW_API_NO_ERROR) {
-		WriteMessage("err code = %i", static_cast<int>(err));
-	}
-	WriteMessage("[console] std view created.");
-
-	std::ofstream out("C:/Users/lwy/Desktop/stdvu_output.json");
-	if (out.is_open()) {
-		out << viewGeom.dump(4);
-		out.close();
-
-		std::ofstream done("C:/Users/lwy/Desktop/stdvu_output.done");
-		done << "done";
-		done.close();
-	}
-	else {
-		WriteMessage("Failed to write result to file.");
-	}
-}
 
 extern "C" __declspec(dllexport) int standardViewDimension(const char* jsonParams) {
 	try {
@@ -897,7 +999,7 @@ extern "C" __declspec(dllexport) int standardViewDimension(const char* jsonParam
 		{
 			if (suffixName == "Z3ASM" || suffixName == "Z3PRT")
 			{
-				WriteMessage("newFile: %s", (rootName + ".Z3DRW").c_str());
+				WriteLog("newFile: %s", (rootName + ".Z3DRW").c_str());
 				err = cvxFileOpen((rootName + ".Z3DRW").c_str());
 				if (err != 0)
 				{
@@ -906,7 +1008,7 @@ extern "C" __declspec(dllexport) int standardViewDimension(const char* jsonParam
 			}
 			else
 			{
-				WriteMessage("newFile: %s", (rootName + ".Z3DRW").c_str());
+				WriteLog("newFile: %s", (rootName + ".Z3DRW").c_str());
 				err = cvxFileOpen((rootName + ".Z3DRW").c_str());
 				if (err != 0)
 				{
@@ -921,6 +1023,51 @@ extern "C" __declspec(dllexport) int standardViewDimension(const char* jsonParam
 		szwPoint2 location{ x, y };
 
 		std::string label = "TOP";
+		switch (type)
+		{
+		case 1: 
+		{
+			label = "TOP";
+			break;
+		}
+		case 2:
+		{
+			label = "FRONT";
+			break;
+		}
+		case 3:
+		{
+			label = "RIGHT";
+			break;
+		}
+		case 4:
+		{
+			label = "BACK";
+			break;
+		}
+		case 5:
+		{
+			label = "BOTTOM";
+			break;
+		}
+		case 6:
+		{
+			label = "LEFT";
+			break;
+		}
+		case 7:
+		{
+			label = "ISOMETRIC";
+			break;
+		}
+		case 39:
+		{
+			label = "DIMETRIC";
+			break;
+		}
+		default:
+			break;
+		}
 
 		szwViewAttribute stdVuAtt;
 		stdVuAtt.showLabel = 1;
@@ -936,7 +1083,7 @@ extern "C" __declspec(dllexport) int standardViewDimension(const char* jsonParam
 		stdVuData.viewAttribute = stdVuAtt;
 
 		if (err != ZW_API_NO_ERROR) {
-			WriteMessage("err code = %i", static_cast<int>(err));
+			WriteLog("err code = %i", static_cast<int>(err));
 		}
 
 		strcpy_s(stdVuData.path, sizeof(zwPath), path.c_str());
@@ -949,52 +1096,125 @@ extern "C" __declspec(dllexport) int standardViewDimension(const char* jsonParam
 		err = ZwDrawingViewStandardCreate(stdVuData, &stdVu);
 
 		if (err != ZW_API_NO_ERROR) {
-			WriteMessage("err code = %i", static_cast<int>(err));
+			WriteLog("err code = %i", static_cast<int>(err));
 		}
+
+		json viewGeom;
+		viewGeom["view id"] = ZwApiHandleToId(stdVu);
+		viewGeom["view"] = type;
+		viewGeom["entities"] = json::array();
+
+		/*err = ZwViewActiveGet(&activeVu);*/
+
+		//szwAutoDimensionData autoDim;
+		//int dimCount;
+		//ZwDrawingDimensionAutoInit(&autoDim);
+		//autoDim.includeAuto = ZW_DIMENSION_AUTO_INCLUDE_ARC | ZW_DIMENSION_AUTO_INCLUDE_CIRCLE | ZW_DIMENSION_AUTO_INCLUDE_HOLE |
+		//	ZW_DIMENSION_AUTO_INCLUDE_LINE | ZW_DIMENSION_AUTO_INCLUDE_HOLE_CALLOUT | ZW_DIMENSION_AUTO_INCLUDE_CYLIND_DIMENSIONS |
+		//	ZW_DIMENSION_AUTO_INCLUDE_MAXIMUM_DIMENSIONS;
+		//autoDim.checkOrigin = 0;
+		//autoDim.pointOrigin = {};
+		//autoDim.horizontalDimension.enable = 0;
+		//autoDim.verticalDimension.enable = 0;
+		//szwEntityHandle* dims;
+		//err = ZwDrawingDimensionAutoCreate(stdVu, autoDim, &dimCount, &dims);
+		//if (err != ZW_API_NO_ERROR) {
+		//	WriteLog("err code = %i", static_cast<int>(err));%i, %i", lineId1, lineId2
+		//}
+
+		szwEntityHandle* ents;
+		int entNum;
+		err = ZwDrawingViewGeometryListGet(stdVu, (ezwDrawingGeometryType)2, &entNum, &ents);
+
+		for (int i = 0; i < entNum; i++)
+		{
+			szwEntityHandle entHandle1 = ents[i];
+			int pointsNum;
+			szwEntityCriticalPointInfo* pointsInfo;
+			err = ZwEntityCriticalPointInfoGet(entHandle1, &pointsNum, &pointsInfo);
+
+			int id = 0;
+			id = ZwApiHandleToId(entHandle1);
+			json ent;
+			ent["id"] = id;
+			if (pointsNum == 3)
+			{
+				ent["type"] = "line";
+				ent["points"]["start"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
+				ent["points"]["end"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
+				ent["points"]["middle"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
+			}
+			else if (pointsNum == 4)
+			{
+				ent["type"] = "arc";
+				ent["points"]["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
+				ent["points"]["start"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
+				ent["points"]["end"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
+				ent["points"]["middle"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
+			}
+			else if (pointsNum == 5)
+			{
+				ent["type"] = "circle";
+				ent["points"]["center"] = { pointsInfo[0].point.x, pointsInfo[0].point.y };
+				ent["points"]["0degree"] = { pointsInfo[1].point.x, pointsInfo[1].point.y };
+				ent["points"]["90degree"] = { pointsInfo[2].point.x, pointsInfo[2].point.y };
+				ent["points"]["180degree"] = { pointsInfo[3].point.x, pointsInfo[3].point.y };
+				ent["points"]["270degree"] = { pointsInfo[4].point.x, pointsInfo[4].point.y };
+			}
+			viewGeom["entities"].push_back(ent);
+		}
+		WriteLog("entities num = %i", static_cast<int>(entNum));
+		ZwEntityHandleListFree(entNum, &ents);
+		//ZwEntityHandleListFree(dimCount, &dims);
 
 		//export to png
 		svxImgData data{};
 		evxExportType eType = (evxExportType)1;
 		err = cvxFileExportInit(eType, 3, &data);
 		if (err != ZW_API_NO_ERROR) {
-			WriteMessage("err code = %i", static_cast<int>(err));
+			WriteLog("err code = %i", static_cast<int>(err));
 		}
 		vxLongPath exportPath;
-		strcpy_s(exportPath, sizeof(vxLongPath), "C:/Users/gyj15/Desktop/zw3d/export/stdvu_output.png");
+		strcpy_s(exportPath, sizeof(vxLongPath), "D:/AI_AUTODIM_DATA/stdvu_output.png");
 		err = cvxFileExport(eType, exportPath, &data);
 		//export end
 
-		// szwAutoDimensionData autoDim;
-		// int dimCount;
-		// ZwDrawingDimensionAutoInit(&autoDim);
-		// autoDim.includeAuto = ZW_DIMENSION_AUTO_INCLUDE_ARC | ZW_DIMENSION_AUTO_INCLUDE_CIRCLE | ZW_DIMENSION_AUTO_INCLUDE_HOLE |
-			// ZW_DIMENSION_AUTO_INCLUDE_LINE | ZW_DIMENSION_AUTO_INCLUDE_HOLE_CALLOUT | ZW_DIMENSION_AUTO_INCLUDE_CYLIND_DIMENSIONS |
-			// ZW_DIMENSION_AUTO_INCLUDE_MAXIMUM_DIMENSIONS;
-		// autoDim.checkOrigin = 0;
-		// autoDim.pointOrigin = {};
-		// autoDim.horizontalDimension.enable = 0;
-		// autoDim.verticalDimension.enable = 0;
-		//szwEntityHandle* dims;
-		//err = ZwDrawingDimensionAutoCreate(stdVu, autoDim, &dimCount, &dims);
-		// if (err != ZW_API_NO_ERROR) {
-			// WriteMessage("err code = %i", static_cast<int>(err));
-		// }
-		// WriteMessage("[console]hole dimension complete", static_cast<int>(err));
-		
-		//getViewLines1(&stdVu, 1);
-		getViewLines2(stdVu, type);
-		
+		if (err != ZW_API_NO_ERROR) {
+			WriteLog("err code = %i", static_cast<int>(err));
+		}
+		WriteLog("[console] std view created.");
+
+		std::ofstream out("D:/AI_AUTODIM_DATA/stdvu_output.json");
+		if (out.is_open()) {
+			out << viewGeom.dump(4);
+			out.close();
+
+			std::ofstream done("D:/AI_AUTODIM_DATA/stdvu_output.done");
+			done << "done";
+			done.close();
+		}
+		else {
+			WriteLog("Failed to write result to file.");
+		}
+
+		json result;
+		result["return code"] = 0;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
+
 		return static_cast<int>(err);
 	}
 	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;
 	}
 }
 
 
 extern "C" __declspec(dllexport) void MyCommand(const char* params) {
-	WriteMessage("传入参数=[%s]", params);//参数可忽略，输入~mycommand或者~mycommand(aaa)调用命令
+	WriteLog("传入参数=[%s]", params);//参数可忽略，输入~mycommand或者~mycommand(aaa)调用命令
 	return;
 }
 
@@ -1023,6 +1243,63 @@ extern "C" __declspec(dllexport) int pathSearchFirst(const vxLongPath Name) {
 	return 0;
 }
 
+
+extern "C" __declspec(dllexport) const char* getViewLines()
+{
+	try {
+		int count = 0;
+		szwEntityHandle* pViews;
+		ZwDrawingSheetViewListGet(nullptr, ZW_DRAWING_ALL_VIEW, &count, &pViews);
+
+		string jstr;
+		if (count > 0)
+		{
+			int cnt_geom = 0;
+			szwEntityHandle* pGeoms;
+			ZwDrawingViewGeometryListGet(pViews[0], ZW_DRAWING_SHOWN_GEOMETRY_COORESPONDING_EDGE_AND_FACE, &cnt_geom, &pGeoms);
+
+			json jout;
+			for (int i = 0; i < cnt_geom; i++)
+			{
+				szwCurve curve;
+				ZwCurveNURBSDataGet(pGeoms[i], 1, &curve);
+				switch (curve.type)
+				{
+				case ZW_CURVE_LINE:
+					jout["type"] = "line";
+					jout["data"] = json();
+					jout["data"]["start point"] = { curve.curveInformation.line.startPoint.x,curve.curveInformation.line.startPoint.y };
+					jout["data"]["end point"] = { curve.curveInformation.line.endPoint.x,curve.curveInformation.line.endPoint.y };
+					break;
+				case ZW_CURVE_ARC:
+					jout["type"] = "arc";
+					jout["data"] = json();
+					jout["data"]["radius"] = curve.curveInformation.arc.radius;
+					jout["data"]["start point"] = { curve.curveInformation.arc.startPoint.x,curve.curveInformation.arc.startPoint.y };
+					jout["data"]["end point"] = { curve.curveInformation.arc.endPoint.x,curve.curveInformation.arc.endPoint.y };
+					jout["data"]["start angle"] = curve.curveInformation.arc.startAngle;
+					jout["data"]["end angle"] = curve.curveInformation.arc.endAngle;
+					jout["data"]["center point"] = { curve.curveInformation.arc.centerPoint.x,curve.curveInformation.arc.centerPoint.y };
+					break;
+				case ZW_CURVE_CIRCLE:
+					jout["data"]["radius"] = curve.curveInformation.circle.radius;
+					jout["data"]["center point"] = { curve.curveInformation.circle.centerPoint.x,curve.curveInformation.circle.centerPoint.y };
+					break;
+				default:
+					continue;
+				}
+			}
+			jstr = jout.dump();
+		}
+		return jstr.c_str();
+	}
+	catch (const std::exception& e) {
+		WriteLog("JSON parse err: %s", e.what());
+		return "";
+	}
+}
+
+
 extern "C" __declspec(dllexport) int RadialDimension(const char* jsonParams) {
 	try
 	{
@@ -1030,8 +1307,8 @@ extern "C" __declspec(dllexport) int RadialDimension(const char* jsonParams) {
 
 		int lineId = params["id"].get<int>();
 
-		szwPoint point = { params["point"].get<std::vector<int>>()[0], params["point"].get<std::vector<int>>()[1], 0};
-		szwPoint textPoint = { params["text point"].get<std::vector<int>>()[0], params["text point"].get<std::vector<int>>()[1], 0 };
+		szwPoint point = { params["point"]["x"].get<double>(), params["point"]["y"].get<double>(), 0 };
+		szwPoint textPoint = { params["text point"]["x"].get<double>(), params["text point"]["y"].get<double>(), 0 };
 
 		ezwErrors err;
 		szwEntityHandle lineHdl;
@@ -1049,17 +1326,23 @@ extern "C" __declspec(dllexport) int RadialDimension(const char* jsonParams) {
 		}
 		data.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
 
-		szwEntityHandle out;
-		err = ZwDrawingDimensionRadialCreate(data, nullptr, &out);
+		//szwEntityHandle out;
+		err = ZwDrawingDimensionRadialCreate(data, nullptr);
 
 		if (err != ZW_API_NO_ERROR) {
-			WriteMessage("err code = %i", static_cast<int>(err));
+			WriteLog("err code = %i", static_cast<int>(err));
 		}
-		WriteMessage("[console] linear dimension created.");
+		WriteLog("[console] radial dimension created. {%i}", lineId);
+		json result;
+		result["return code"] = 0;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return static_cast<int>(err);
 	}
 	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;
 	}
 }
@@ -1071,8 +1354,8 @@ extern "C" __declspec(dllexport) int ArcLengthDimension(const char* jsonParams) 
 
 		int lineId = params["arc id"].get<int>();
 
-		szwPoint point = { params["arc point"].get<std::vector<int>>()[0], params["point"].get<std::vector<int>>()[1], 0 };
-		szwPoint textPoint = { params["text point"].get<std::vector<int>>()[0], params["text point"].get<std::vector<int>>()[1], 0 };
+		szwPoint point = { params["arc point"]["x"].get<double>(), params["arc point"]["y"].get<double>(), 0 };
+		szwPoint textPoint = { params["text point"]["x"].get<double>(), params["text point"]["y"].get<double>(), 0 };
 
 		ezwErrors err;
 		szwEntityHandle lineHdl;
@@ -1090,16 +1373,22 @@ extern "C" __declspec(dllexport) int ArcLengthDimension(const char* jsonParams) 
 		data.textPoint = { NULL, ZW_CRITICAL_FREE_POINT, 0, &textPoint };
 
 		szwEntityHandle out;
-		err = ZwDrawingDimensionArcCreate(data, nullptr, &out);
+		err = ZwDrawingDimensionArcCreate(data,&out);
 
 		if (err != ZW_API_NO_ERROR) {
-			WriteMessage("err code = %i", static_cast<int>(err));
+			WriteLog("err code = %i", static_cast<int>(err));
 		}
-		WriteMessage("[console] linear dimension created.");
+		WriteLog("[console] arc length dimension created. {%i}", lineId);
+		json result;
+		result["return code"] = 0;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return static_cast<int>(err);
 	}
 	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;
 	}
 }
@@ -1112,45 +1401,50 @@ extern "C" __declspec(dllexport) int HoleCalloutDimension(const char* jsonParams
 		int holeId = params["hole curve id"].get<int>();
 		int vuId = params["view id"].get<int>();
 
-		szwPoint2 textPoint = { params["text point"].get<std::vector<int>>()[0], params["text point"].get<std::vector<int>>()[1] };
+		szwPoint2 textPoint = { params["text point"]["x"].get<double>(), params["text point"]["y"].get<double>() };
 
 		ezwErrors err;
-		szwEntityHandle holeHdl,vuHdl;
+		szwEntityHandle holeHdl, vuHdl;
 		szwDrawingHoleCalloutData data;
 		err = ZwDrawingDimensionHoleCalloutInit(&data);
 		data.type = ZW_HOLE_CALLOUT_SHAPE_RADIAL;
-
 		err = ZwApiIdtoHandle(vuId, &vuHdl);
 		data.viewHandle = vuHdl;
-
 		err = ZwApiIdtoHandle(holeId, &holeHdl);
-		szwDrawingHoleCalloutHole hole{ holeHdl,&textPoint };
+		szwDrawingHoleCalloutHole hole{ holeHdl, &textPoint};
 		data.holes = &hole;
 		data.count = 1;
 
 		int count_out = 0;
-		szwEntityHandle* out;
-		err = ZwDrawingDimensionHoleCalloutCreate(data, nullptr, &count_out, &out);
-		ZwEntityHandleListFree(count_out, &out);
+		//szwEntityHandle* out;
+		err = ZwDrawingDimensionHoleCalloutCreate(data, &count_out, nullptr);
+		//ZwEntityHandleListFree(count_out, &out);
 
 		if (err != ZW_API_NO_ERROR) {
-			WriteMessage("err code = %i", static_cast<int>(err));
+			WriteLog("err code = %i", static_cast<int>(err));
 		}
-		WriteMessage("[console] linear dimension created.");
+		WriteLog("[console] hole callout dimension created., {%i}", holeId);
+		json result;
+		result["return code"] = 0;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return static_cast<int>(err);
 	}
 	catch (const std::exception& e) {
-		WriteMessage("JSON parse err: %s", e.what());
+		WriteLog("JSON parse err: %s", e.what());
+		json result;
+		result["return code"] = 1;
+		WriteResultToJsonFile("D:/AI_AUTODIM_DATA/zw3d_result.json", result);
 		return -1;
 	}
 }
 
-extern "C" __declspec(dllexport) int Z3DemoInit() {
+
+extern "C" __declspec(dllexport) int ZW3D_V1Init() {
 	ZwCommandFunctionLoad("mycommand", MyCommand, ZW_LICENSE_CODE_GENERAL);//注册命令
 
 	ZwCommandFunctionLoad("FILEOPEN", fileOpen, ZW_LICENSE_CODE_GENERAL);
 	ZwCommandFunctionLoad("FILEEXPORT", fileExport, ZW_LICENSE_CODE_GENERAL);
-	ZwCommandFunctionLoad("FILESAVE", fileSaveOrClose, ZW_LICENSE_CODE_GENERAL);
+	//ZwCommandFunctionLoad("FILESAVE", fileSaveOrClose, ZW_LICENSE_CODE_GENERAL);
 
 	ZwCommandFunctionLoad("STDVUCREATE", standardViewCreate, ZW_LICENSE_CODE_GENERAL);
 	ZwCommandFunctionLoad("STDVUDIM", standardViewDimension, ZW_LICENSE_CODE_GENERAL);
@@ -1158,13 +1452,19 @@ extern "C" __declspec(dllexport) int Z3DemoInit() {
 	ZwCommandFunctionLoad("LINDIM", linearDimension, ZW_LICENSE_CODE_GENERAL);
 	ZwCommandFunctionLoad("LINOFFSETDIM", linearOffsetDimension, ZW_LICENSE_CODE_GENERAL);
 	ZwCommandFunctionLoad("AUTODIM", autoDimension, ZW_LICENSE_CODE_GENERAL);
+
 	ZwCommandFunctionLoad("RADIALDIM", RadialDimension, ZW_LICENSE_CODE_GENERAL);
 	ZwCommandFunctionLoad("ARCLENDIM", ArcLengthDimension, ZW_LICENSE_CODE_GENERAL);
 	ZwCommandFunctionLoad("HOLECALLOUTDIM", HoleCalloutDimension, ZW_LICENSE_CODE_GENERAL);
+
+	ZwCommandFunctionLoad("ASMTREE", createAssemblyTree, ZW_LICENSE_CODE_GENERAL);
+	ZwCommandFunctionLoad("COMPINSERT", insertComponent, ZW_LICENSE_CODE_GENERAL);
+	ZwCommandFunctionLoad("FILENEW", newFile, ZW_LICENSE_CODE_GENERAL);
+	ZwCommandFunctionLoad("FILEACTIVE", activateFile, ZW_LICENSE_CODE_GENERAL);
 	return 0;
 }
 
-extern "C" __declspec(dllexport) int Z3DemoExit() {
+extern "C" __declspec(dllexport) int ZW3D_V1Exit() {
 	ZwCommandFunctionUnload("mycommand");//卸载命令
 	return 0;
 }
